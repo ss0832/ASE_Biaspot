@@ -191,7 +191,7 @@ def dihedral_radian(positions: np.ndarray, i: int, j: int, k: int, l: int) -> fl
         If any two indices are identical.
     """
     validate_indices([i, j, k, l], positions.shape[0])
-    b0 = positions[j] - positions[i]
+    b0 = positions[i] - positions[j]
     b1 = positions[k] - positions[j]
     b2 = positions[l] - positions[k]
 
@@ -331,7 +331,7 @@ def dihedral_radian_tensor(positions: torch.Tensor, i: int, j: int, k: int, l: i
     import torch
 
     validate_indices([i, j, k, l], positions.shape[0])
-    b0 = positions[j] - positions[i]
+    b0 = positions[i] - positions[j]
     b1 = positions[k] - positions[j]
     b2 = positions[l] - positions[k]
     b1_norm = torch.linalg.norm(b1)

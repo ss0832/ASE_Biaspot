@@ -172,8 +172,9 @@ print(f"H-H distance: {atoms.get_distance(1, 2):.4f} Å")
 > **Note — `expression_callable` naming constraint**
 > When using the `"expression"` string form, variable names (`variables` dict)
 > and parameter names (`params` dict) are merged into one namespace before the
-> expression is evaluated.  A key that appears in **both** dicts raises a
-> `ValueError` at evaluation time with a message listing the conflicting names.
+> expression is evaluated. A key that appears in **both** dicts raises a
+> `ValueError` **at construction time** (i.e. when `term_from_spec()` is called),
+> **not** at evaluation time. The error message lists all conflicting names.
 > Keep all names distinct — e.g. use `r` for a distance variable and `r0` for
 > its equilibrium parameter, never the same string for both.
 
@@ -291,11 +292,20 @@ print(f"H-H distance: {atoms.get_distance(0, 1):.4f} Å")
 | `supports_autograd` property | Optional | Return `True` to enable autograd path |
 | `evaluate_tensor(positions, atomic_numbers)` | When autograd enabled | Returns energy as a Torch scalar tensor |
 
-> **`self.name` is enforced at instantiation time.** If a subclass `__init__`
-> does not assign `self.name`, a `TypeError` is raised immediately when the
-> object is created — not later when `BiasCalculator.calculate()` is called.
-> Dataclass-based subclasses (like `AFIRTerm`) are unaffected because their
-> generated `__init__` always sets `self.name`.
+> **`self.name` enforcement applies only to subclasses that define their own**
+> **`__init__`.** The `__init_subclass__` hook wraps manually written `__init__`
+> methods and raises `TypeError` at instantiation time when `self.name` is not
+> assigned inside them.
+> 
+> If a subclass does **not** define `__init__` at all (relying entirely on
+> Python's default object initializer), no `TypeError` is raised at
+> instantiation; `self.name` simply remains unset (`AttributeError` will occur
+> later when `BiasCalculator` attempts to access `term.name`).
+> 
+> To trigger the enforcement in all cases, always provide an explicit `__init__`
+> that assigns `self.name`, as shown in the examples below. Dataclass-based
+> subclasses (such as `AFIRTerm`) are unaffected because their generated
+> `__init__` always sets `name` through the required field declaration.
 
 > **Important — `evaluate_tensor()` must return a scalar tensor (shape=()).**
 > If your function naturally produces a vector (e.g. per-pair contributions),

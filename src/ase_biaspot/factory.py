@@ -77,7 +77,16 @@ def register(type_name: str) -> Callable:
 # ── Variable extractor helpers ────────────────────────────────────────────────
 
 
-def _make_variable_extractor(spec: dict[str, Any]) -> Callable[[GeometryContext], Any]:
+def _make_variable_extractor(
+    spec: dict[str, Any] | Callable[[GeometryContext], Any],
+) -> Callable[[GeometryContext], Any]:
+    # If the caller already provided a callable (e.g. ``lambda ctx: ctx.distance(0, 1)``),
+    # return it directly.  This keeps ``type="callable"`` spec consistent with
+    # ``BiasTerm.from_callable()`` and ``CallableTerm``, both of which accept
+    # lambda-valued ``variables`` dicts.
+    if callable(spec):
+        return spec
+
     stype = spec["type"]
 
     if stype == "distance":
@@ -313,7 +322,7 @@ def _build_expression_callable(name: str, spec: dict[str, Any]) -> CallableTerm:
     ValueError
         If neither ``"expression"`` nor ``"callable"`` is present.
     ValueError
-        At evaluation time (string expression form only), if any key appears
+        At *build time* via term_from_spec() (string expression form only), if any key appears
         in both ``"variables"`` and ``"params"``.  Variables and parameters
         are merged into a single namespace for expression evaluation; shared
         keys would cause the parameter value to silently overwrite the

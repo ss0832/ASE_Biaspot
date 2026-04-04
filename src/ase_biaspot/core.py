@@ -760,10 +760,26 @@ if _TORCH_AVAILABLE:
             name: str,
             group_a: list[int],
             group_b: list[int],
-            gamma_init: float,
+            gamma_init: float | None = None,
             power: float = 6.0,
             gamma_min_abs: float = 0.1,
+            *,
+            gamma: float | None = None,
         ) -> None:
+            # ``gamma`` is a convenience alias for ``gamma_init`` so that
+            # ``TorchAFIRTerm(gamma=5.0)`` works the same way as
+            # ``AFIRTerm(gamma=5.0)``.  Passing both raises ``ValueError``.
+            if gamma is not None and gamma_init is not None:
+                raise ValueError(
+                    "TorchAFIRTerm: specify either 'gamma_init' or the alias 'gamma', not both."
+                )
+            if gamma is not None:
+                gamma_init = gamma
+            if gamma_init is None:
+                raise TypeError(
+                    "TorchAFIRTerm.__init__() missing required argument: "
+                    "'gamma_init' (or its alias 'gamma')."
+                )
             super().__init__(name)
             self.group_a = list(group_a)
             self.group_b = list(group_b)

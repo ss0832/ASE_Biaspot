@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.5] — 2026-04-04
+
+### Fixed
+
+- **Cache invalidation for learnable parameters** — `BiasCalculator.calculation_required()`
+  now overrides the ASE base class to detect `nn.Parameter` value changes between steps.
+  Previously, when an external `torch.optim` optimizer updated learnable bias parameters
+  while atomic positions remained unchanged, ASE's cache returned stale energies/forces.
+  The fix tracks per-parameter snapshots via `_params_changed()` and forces recalculation
+  when any parameter tensor differs from its previous value.
+
+---
+
 ## [0.1.4] — 2026-04-04
 
 ### Fixed

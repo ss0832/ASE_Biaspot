@@ -152,6 +152,7 @@ class BiasCalculator(Calculator):
         self._step = 0
         self._csv_initialized = False
         self._warned_fd = False  # emitted at most once per instance
+        self._param_snapshot: dict[int, Any] = {}  # id(param) -> last seen value
 
         # ── Duplicate term name validation ───────────────────────────────────
         seen: set[str] = set()
@@ -199,6 +200,44 @@ class BiasCalculator(Calculator):
                     UserWarning,
                     stacklevel=2,
                 )
+
+    # ── Cache invalidation for learnable parameters ───────────────────────────
+
+    def _collect_nn_params(self) -> list[Any]:
+        """Return all nn.Parameter tensors from TorchBiasTerm terms."""
+        if not _TORCH_AVAILABLE:
+            return []
+        params = []
+        for t in self.terms:
+            if isinstance(t, nn.Module):
+                params.extend(t.parameters())
+        return params
+
+    def _params_changed(self) -> bool:
+        """Return True if any nn.Parameter value has changed since last call."""
+        changed = False
+        for p in self._collect_nn_params():
+            key = id(p)
+            current = p.detach().cpu().clone()
+            prev = self._param_snapshot.get(key)
+            if prev is None or not torch.equal(prev, current):
+                self._param_snapshot[key] = current
+                changed = True
+        return changed
+
+    def calculation_required(self, atoms: Atoms, properties: list[str]) -> bool:
+        """Return True when recalculation is needed.
+
+        Extends the default position/cell/charge check with a check for
+        ``nn.Parameter`` value changes.  When a learnable bias parameter is
+        updated by an external ``torch.optim`` optimizer between two geometry
+        steps, the positions may be identical but the bias energy has changed;
+        ASE's default cache would incorrectly return the stale result without
+        this override.
+        """
+        if self._params_changed():
+            return True
+        return super().calculation_required(atoms, properties)
 
     # ── Main entry point ─────────────────────────────────────────────────────
 

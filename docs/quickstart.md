@@ -102,7 +102,7 @@ atoms.calc = EMT()
 #
 # ⚠️  Name uniqueness: variables and params are merged into one namespace
 #     for expression evaluation.  If a key appears in BOTH dicts a ValueError
-#     is raised at term_from_spec() call time — use distinct names to avoid this.
+#     is raised at evaluation time — use distinct names to avoid this.
 #     e.g. variable "th" and param "th0" are fine; naming both "th" is not.
 angle_spec = {
     "name": "angle_bias",
@@ -173,9 +173,7 @@ print(f"H-H distance: {atoms.get_distance(1, 2):.4f} Å")
 > When using the `"expression"` string form, variable names (`variables` dict)
 > and parameter names (`params` dict) are merged into one namespace before the
 > expression is evaluated.  A key that appears in **both** dicts raises a
-> `ValueError` at **`term_from_spec()` call time** (i.e. when the term is
-> constructed, not at the first `get_potential_energy()` call) with a message
-> listing the conflicting names.
+> `ValueError` at evaluation time with a message listing the conflicting names.
 > Keep all names distinct — e.g. use `r` for a distance variable and `r0` for
 > its equilibrium parameter, never the same string for both.
 
@@ -302,10 +300,7 @@ print(f"H-H distance: {atoms.get_distance(0, 1):.4f} Å")
 > **Important — `evaluate_tensor()` must return a scalar tensor (shape=()).**
 > If your function naturally produces a vector (e.g. per-pair contributions),
 > reduce it explicitly before returning: `return contributions.sum()`.
-> Returning a non-scalar raises `TypeError` in the autograd forces path, and
-> `RuntimeError` (`"a Tensor with N elements cannot be converted to Scalar"`)
-> in the energy-only path — catch `(TypeError, RuntimeError)` if you need to
-> guard against both.
+> Returning a non-scalar raises `TypeError` in `BiasCalculator`.
 
 ## Energy units
 
@@ -634,9 +629,7 @@ print(f"H-H distance: {atoms.get_distance(0, 1):.4f} Å")
 | Implement `evaluate_tensor()` (Torch, autograd path) | `torch.linalg.norm` + `torch.exp` |
 
 > **Note:** `evaluate_tensor()` must return a rank-0 tensor (shape=`()`).
-> Returning a non-scalar raises `TypeError` in the autograd forces path, or
-> `RuntimeError` (`"a Tensor with N elements cannot be converted to Scalar"`)
-> in the energy-only path. Use `(TypeError, RuntimeError)` if catching either.
+> Returning a vector will cause `BiasCalculator` to raise a `TypeError`.
 > When summing contributions over multiple pairs, reduce explicitly with `contributions.sum()`.
 
 ---

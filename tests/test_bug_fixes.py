@@ -17,6 +17,11 @@ from typing import TYPE_CHECKING
 import pytest
 
 torch = pytest.importorskip("torch", reason="PyTorch not installed")
+# Guard against namespace-package residues left by `pip uninstall torch`:
+# importorskip succeeds for an empty namespace package, but the real torch
+# always exposes torch.Tensor.
+if not hasattr(torch, "Tensor"):
+    pytest.skip("PyTorch is not properly installed (namespace residue detected)", allow_module_level=True)
 
 if TYPE_CHECKING:
     import torch

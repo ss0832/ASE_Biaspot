@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 
 from ase_biaspot import term_from_spec
+from ase_biaspot._compat import _TORCH_AVAILABLE
 from ase_biaspot.core import CallableTerm
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -127,9 +127,7 @@ class TestBug1CallableSpecLambdaVariables:
         )
         e_spec = term_spec.evaluate(_POS_H2)
         e_api = term_api.evaluate(_POS_H2)
-        assert abs(e_spec - e_api) < 1e-12, (
-            f"spec energy {e_spec} != from_callable energy {e_api}"
-        )
+        assert abs(e_spec - e_api) < 1e-12, f"spec energy {e_spec} != from_callable energy {e_api}"
 
     def test_expression_callable_lambda_variable_also_works(self) -> None:
         """
@@ -153,9 +151,8 @@ class TestBug1CallableSpecLambdaVariables:
 # Bug 2 — TorchAFIRTerm gamma= alias
 # ---------------------------------------------------------------------------
 
-torch = pytest.importorskip("torch", reason="PyTorch not installed")
 
-
+@pytest.mark.skipif(not _TORCH_AVAILABLE, reason="PyTorch not installed")
 class TestBug2TorchAFIRTermGammaAlias:
     """TorchAFIRTerm must accept gamma= as an alias for gamma_init=."""
 
@@ -171,9 +168,7 @@ class TestBug2TorchAFIRTermGammaAlias:
         from ase_biaspot import TorchAFIRTerm
 
         t_alias = TorchAFIRTerm(name="a", group_a=[0], group_b=[1], gamma=3.0)
-        t_explicit = TorchAFIRTerm(
-            name="b", group_a=[0], group_b=[1], gamma_init=3.0
-        )
+        t_explicit = TorchAFIRTerm(name="b", group_a=[0], group_b=[1], gamma_init=3.0)
         assert abs(t_alias.gamma_param.item() - t_explicit.gamma_param.item()) < 1e-12
 
     def test_gamma_and_gamma_init_both_raises(self) -> None:
@@ -181,9 +176,7 @@ class TestBug2TorchAFIRTermGammaAlias:
         from ase_biaspot import TorchAFIRTerm
 
         with pytest.raises(ValueError, match="not both"):
-            TorchAFIRTerm(
-                name="a", group_a=[0], group_b=[1], gamma=5.0, gamma_init=5.0
-            )
+            TorchAFIRTerm(name="a", group_a=[0], group_b=[1], gamma=5.0, gamma_init=5.0)
 
     def test_neither_gamma_nor_gamma_init_raises(self) -> None:
         """Omitting both gamma= and gamma_init= must raise TypeError."""
@@ -198,18 +191,15 @@ class TestBug2TorchAFIRTermGammaAlias:
 
         gamma_val = 7.5
         t_fixed = AFIRTerm(name="f", group_a=[0], group_b=[1], gamma=gamma_val)
-        t_learn = TorchAFIRTerm(
-            name="l", group_a=[0], group_b=[1], gamma=gamma_val
-        )
+        t_learn = TorchAFIRTerm(name="l", group_a=[0], group_b=[1], gamma=gamma_val)
         assert abs(t_fixed.gamma - t_learn.gamma_param.item()) < 1e-12
 
     def test_gamma_alias_energy_matches_afir_energy(self) -> None:
         """Energy from TorchAFIRTerm(gamma=...) must equal AFIRTerm energy."""
-        import torch
+        from ase.build import molecule
+        from ase.calculators.emt import EMT
 
         from ase_biaspot import AFIRTerm, BiasCalculator, TorchAFIRTerm
-        from ase.calculators.emt import EMT
-        from ase.build import molecule
 
         atoms = molecule("H2O")
         gamma = 2.0

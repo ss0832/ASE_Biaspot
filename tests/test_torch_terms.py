@@ -8,11 +8,13 @@ installed (pytest.importorskip skips the entire module at collection time).
 import numpy as np
 import pytest
 
-# Skip the entire module cleanly if torch is absent.
-# This avoids the need for per-class skipif decorators or if-guards around
-# imports, and means torch/nn are always available as plain module names.
-torch = pytest.importorskip("torch", reason="PyTorch not installed")
-import torch.nn as nn  # noqa: E402
+# Skip the entire module cleanly if torch is absent or only partially installed.
+# Guarding on "torch.nn" rather than "torch" ensures that namespace-package
+# residues left by `pip uninstall torch` (where `import torch` succeeds but
+# `torch.nn` is missing) also trigger a skip.  Once torch.nn is confirmed
+# importable, a plain `import torch` is safe.
+nn = pytest.importorskip("torch.nn", reason="PyTorch not installed")
+import torch  # noqa: E402
 
 from ase_biaspot import (  # noqa: E402
     BiasCalculator,

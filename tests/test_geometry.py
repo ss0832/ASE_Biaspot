@@ -96,6 +96,11 @@ def test_context_copies_positions(pos4):
 # Using pytest.importorskip at module level (instead of per-test skipif decorators)
 # ensures the entire block is skipped cleanly at collection time.
 torch = pytest.importorskip("torch", reason="PyTorch not installed")
+# Guard against namespace-package residues left by `pip uninstall torch`:
+# importorskip succeeds for an empty namespace package, but the real torch
+# always exposes torch.Tensor.
+if not hasattr(torch, "Tensor"):
+    pytest.skip("PyTorch is not properly installed (namespace residue detected)", allow_module_level=True)
 from ase_biaspot.context import TorchGeometryContext  # noqa: E402
 from ase_biaspot.geometry import (  # noqa: E402
     angle_radian_tensor,

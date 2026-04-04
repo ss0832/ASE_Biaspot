@@ -102,7 +102,7 @@ atoms.calc = EMT()
 #
 # ⚠️  Name uniqueness: variables and params are merged into one namespace
 #     for expression evaluation.  If a key appears in BOTH dicts a ValueError
-#     is raised at evaluation time — use distinct names to avoid this.
+#     is raised at construction time (inside term_from_spec()) — use distinct names to avoid this.
 #     e.g. variable "th" and param "th0" are fine; naming both "th" is not.
 angle_spec = {
     "name": "angle_bias",

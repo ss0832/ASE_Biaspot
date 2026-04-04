@@ -6,7 +6,42 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [0.1.6] — 2026-04-04
+## [0.1.7] — 2026-04-04
+
+### Fixed
+
+- **Bug 1 (critical) — `check_state` not overridden; `nn.Parameter` changes
+  ignored by ASE cache** (`calculator.py`).
+
+  ASE's `Calculator.get_property()` decides whether to reuse cached results by
+  calling `check_state()`, **not** `calculation_required()`.  The 0.1.5
+  release overrode only `calculation_required`, which had no effect: when
+  atomic positions were unchanged `check_state()` returned an empty list and
+  the stale energy/forces were served from cache, regardless of any
+  `nn.Parameter` updates made by an external optimizer.
+
+  Fixed by overriding `check_state()` to append `"nn_params"` to the changes
+  list whenever `_params_changed()` returns `True`.  `calculation_required()`
+  has been updated to delegate to `check_state` for consistency.
+
+- **Bug 2 — `zero_param_grads=False` gradient accumulation silently broken**
+  (`calculator.py`).
+
+  A direct consequence of Bug 1: because the second `get_forces()` call
+  returned the cached result without running `backward()`, no new gradients
+  were computed and `k.grad` was never incremented.  The `zero_param_grads`
+  flag itself was implemented correctly; it simply never had a chance to take
+  effect.  Bug 1's fix restores correct gradient accumulation behaviour.
+
+### Documentation
+
+- **`docs/quickstart.md`** — Comment at the `expression_callable` example
+  corrected: `ValueError` for variable/param name overlap is raised at
+  **construction time** (inside `term_from_spec()`) not at evaluation time.
+  Matches the factual description in `factory._build_expression_callable`
+  docstring that was added in 0.1.4.
+
+
 
 ### Fixed
 

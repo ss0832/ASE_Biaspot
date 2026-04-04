@@ -225,19 +225,44 @@ class BiasCalculator(Calculator):
                 changed = True
         return changed
 
+    def check_state(self, atoms: Atoms, tol: float = 1e-15) -> list[str]:
+        """Return a list of changed quantities that require recalculation.
+
+        Overrides :meth:`ase.calculators.calculator.Calculator.check_state`
+        to extend the default position/cell/pbc/charge check with a check for
+        ``nn.Parameter`` value changes.
+
+        ASE's :meth:`~ase.calculators.calculator.Calculator.get_property`
+        calls ``check_state()`` (not ``calculation_required()``) to decide
+        whether the cached results are still valid.  Overriding only
+        ``calculation_required`` (as done in 0.1.5–0.1.6) therefore had no
+        effect: when atomic positions were unchanged the parent
+        ``check_state()`` returned an empty list and the stale cache was
+        returned without ever calling ``calculate()``.
+
+        This override appends ``"nn_params"`` to the changes list whenever any
+        tracked ``nn.Parameter`` has been modified since the last
+        ``calculate()`` call, forcing a full recalculation.
+        """
+        changes = super().check_state(atoms, tol)
+        if not changes and self._params_changed():
+            changes = ["nn_params"]
+        return changes
+
     def calculation_required(self, atoms: Atoms, properties: list[str]) -> bool:
         """Return True when recalculation is needed.
 
-        Extends the default position/cell/charge check with a check for
-        ``nn.Parameter`` value changes.  When a learnable bias parameter is
-        updated by an external ``torch.optim`` optimizer between two geometry
-        steps, the positions may be identical but the bias energy has changed;
-        ASE's default cache would incorrectly return the stale result without
-        this override.
+        Delegates to :meth:`check_state` (which now correctly detects
+        ``nn.Parameter`` changes) so that callers who invoke
+        ``calculation_required()`` directly also observe the correct answer.
+
+        .. note::
+            ASE's internal cache machinery calls :meth:`check_state`, not this
+            method.  The authoritative cache-invalidation logic lives in
+            ``check_state``; this method is retained for API compatibility and
+            for direct callers.
         """
-        if self._params_changed():
-            return True
-        return super().calculation_required(atoms, properties)
+        return bool(self.check_state(atoms)) or super().calculation_required(atoms, properties)
 
     # ── Main entry point ─────────────────────────────────────────────────────
 
@@ -312,6 +337,14 @@ class BiasCalculator(Calculator):
                 per_term=per_term,
             )
         )
+
+        # ── Sync nn.Parameter snapshot ───────────────────────────────────────
+        # ASE's get_property() short-circuits check_state() and calls
+        # calculate() directly when self.results is empty (first call ever).
+        # In that case _params_changed() has never been called and the snapshot
+        # is empty.  We sync it here so the *next* check_state() call sees a
+        # populated baseline and does not spuriously report "nn_params" changed.
+        self._params_changed()  # side-effect: updates _param_snapshot
 
     # ── Bias computation (energy + gradient, single pass) ────────────────────
 

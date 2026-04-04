@@ -25,11 +25,14 @@ Exports
 -------
 _TORCH_AVAILABLE : bool
     True when PyTorch is importable in the current environment.
-    Detected via a two-stage probe: :func:`importlib.util.find_spec` is used
+    Detected via a three-stage probe: :func:`importlib.util.find_spec` is used
     as a fast negative check (avoids executing torch when it is simply absent),
-    and a secondary :func:`importlib.import_module` call verifies that the
-    package is actually importable (catches broken installations where the
-    distribution metadata is present but the package cannot be loaded).
+    a secondary :func:`importlib.import_module` call verifies that the package
+    is actually importable (catches broken installations where the distribution
+    metadata is present but the package cannot be loaded), and a final
+    :func:`hasattr` check for ``torch.Tensor`` guards against namespace-package
+    residues left behind by ``pip uninstall torch`` (where the directory
+    persists on ``sys.path`` but the package has no real attributes).
 require_torch : callable
     Raises :exc:`ImportError` with a consistent, helpful message when
     PyTorch is not available.  Call this at the top of any function or
@@ -41,20 +44,37 @@ from __future__ import annotations
 import importlib
 from importlib.util import find_spec
 
-# Two-stage probe: find_spec() avoids executing torch's __init__ when torch is
-# simply absent (the common case in CPU-only environments), while the secondary
-# import_module() call catches broken installations where the distribution
-# metadata is present on disk but the package itself cannot be imported (e.g. a
-# missing compiled extension, corrupt wheel, or ABI mismatch).
-# Using find_spec alone is insufficient because it only checks sys.path / dist
-# metadata without verifying that the package is actually importable.
+# Three-stage probe:
+#   1. find_spec() — fast negative check; avoids executing torch's __init__
+#      when torch is simply absent (the common case in CPU-only environments).
+#   2. import_module("torch") — catches broken installations where dist metadata
+#      is present but the package cannot be loaded (e.g. corrupt wheel, ABI
+#      mismatch, or missing compiled extension).
+#   3. hasattr check for "Tensor" — guards against namespace-package residues
+#      left behind by `pip uninstall torch`.  After uninstallation the
+#      directory may persist on sys.path, causing find_spec() to return a
+#      non-None ModuleSpec (loader=NamespaceLoader) and import_module() to
+#      succeed with an empty namespace module that has no torch attributes.
+#      A genuine PyTorch install always exposes torch.Tensor; the namespace
+#      residue does not.
 _TORCH_AVAILABLE: bool
 if find_spec("torch") is not None:
     try:
-        importlib.import_module("torch")
+        _torch_mod = importlib.import_module("torch")
+        if not hasattr(_torch_mod, "Tensor"):
+            raise ImportError(
+                "torch namespace package found but 'torch.Tensor' is missing; "
+                "the package may have been partially uninstalled."
+            )
         _TORCH_AVAILABLE = True
-    except ImportError:
+    except Exception:  # ImportError, AttributeError, or any load-time error
         _TORCH_AVAILABLE = False
+    finally:
+        # Don't leak the temporary reference into module scope.
+        try:
+            del _torch_mod
+        except NameError:
+            pass
 else:
     _TORCH_AVAILABLE = False
 

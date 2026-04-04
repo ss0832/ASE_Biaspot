@@ -56,9 +56,5 @@ Installation
    # Install from PyPI
    pip install ase-biaspot
 
-   # With PyTorch support (autograd / learnable parameters)
-   pip install "ase-biaspot[torch]"
-
    # Development install from source
-   pip install -e .
-   pip install -e ".[torch]"
+   pip install -e ".[dev]"

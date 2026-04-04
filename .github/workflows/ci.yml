@@ -1,1 +1,175 @@
+name: CI
 
+on:
+  push:
+    branches: [main, "release/**"]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs on the same branch to save CI minutes
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Lint (ruff)
+  # --------------------------------------------------------------------------
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install "ruff>=0.5"
+
+      - name: Run ruff check
+        run: ruff check .
+
+      - name: Run ruff format check
+        run: ruff format --check .
+
+  # --------------------------------------------------------------------------
+  # Type-check (mypy)
+  # --------------------------------------------------------------------------
+  typecheck:
+    name: Type-check (mypy)
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Run both with and without torch so we verify stub coverage in each env
+        include:
+          - python-version: "3.12"
+            torch: "false"
+          - python-version: "3.12"
+            torch: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install (no torch)
+        if: matrix.torch == 'false'
+        run: pip install -e ".[dev]"
+
+      - name: Install (with torch)
+        if: matrix.torch == 'true'
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]"
+
+      - name: Run mypy
+        run: mypy src/ase_biaspot/
+
+
+  # --------------------------------------------------------------------------
+  # Tests — without PyTorch
+  # --------------------------------------------------------------------------
+  test-no-torch:
+    name: Test Python ${{ matrix.python-version }} / no-torch
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install (no torch)
+        run: pip install -e ".[dev]"
+
+      - name: Run pytest with coverage
+        run: |
+          pytest tests/ \
+            --cov=ase_biaspot \
+            --cov-report=xml:coverage-no-torch.xml \
+            --cov-report=term-missing
+          # No --cov-fail-under here: torch code paths are unreachable without
+          # PyTorch, so the no-torch job structurally cannot hit 80%.
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-no-torch-py${{ matrix.python-version }}
+          path: coverage-no-torch.xml
+
+  # --------------------------------------------------------------------------
+  # Tests — with PyTorch
+  # --------------------------------------------------------------------------
+  test-torch:
+    name: Test Python ${{ matrix.python-version }} / torch
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]   # torch CPU wheels are available for all three
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install (with torch)
+        # Use CPU-only wheel to keep install time short
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]"
+
+      - name: Run pytest with coverage
+        run: |
+          pytest tests/ \
+            --cov=ase_biaspot \
+            --cov-report=xml:coverage-torch.xml \
+            --cov-report=term-missing \
+            --cov-fail-under=80
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-torch-py${{ matrix.python-version }}
+          path: coverage-torch.xml
+
+  # --------------------------------------------------------------------------
+  # Upload coverage to Codecov
+  # --------------------------------------------------------------------------
+  upload-coverage:
+    name: Upload coverage to Codecov
+    needs: [test-no-torch, test-torch]
+    runs-on: ubuntu-latest
+    # Skip on forks where the CODECOV_TOKEN secret is not available
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage-no-torch.xml,coverage-torch.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false   # do not fail CI if Codecov is unreachable

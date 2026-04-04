@@ -161,14 +161,13 @@ print(f"H-H distance: {atoms.get_distance(1, 2):.4f} Å")
 | `"expression_callable"` with `"callable"` key | Python callable passed directly | ❌ |
 | `"callable"` | Python callable passed directly (fully supported; not deprecated) | ❌ |
 | `"torch_callable"` | Torch-native callable with learnable `nn.Parameter` weights | ❌ |
-| `"torch_afir"` | AFIR term with learnable `gamma` (`nn.Parameter`) | ⚠️ spec のみ |
+| `"torch_afir"` | AFIR term with learnable `gamma` (`nn.Parameter`) | ⚠️ spec only |
 
-> **Note — `"torch_afir"` の JSON/YAML-safe 欄について**
-> `"torch_afir"` の spec dict 自体は primitive 値のみで構成されるため、JSON/YAML への
-> シリアライズは可能です。ただし、**学習済みの `gamma` 値 (`nn.Parameter`) は spec
-> に含まれない**ため、JSON からロードすると `gamma` は初期値にリセットされます。
-> 学習済みパラメータを永続化するには `torch.save(term.state_dict(), path)` を
-> 別途使用してください。
+> **Note — on the JSON/YAML-safe column for `"torch_afir"`**
+> The `"torch_afir"` spec dict itself contains only primitive values, so serialisation
+> to JSON/YAML is possible. However, **the trained `gamma` value (`nn.Parameter`) is not
+> included in the spec**, so loading from JSON will reset `gamma` to its initial value.
+> To persist trained parameters, use `torch.save(term.state_dict(), path)` separately.
 
 > **Note — `expression_callable` naming constraint**
 > When using the `"expression"` string form, variable names (`variables` dict)
@@ -391,15 +390,15 @@ step, E_base, E_bias_total, E_total, Fmax, bias_<term_name>, ...
 
 ## Example 6 — Custom BiasTerm with autograd: Morse potential
 
-`BiasTerm` をサブクラス化し、`evaluate_tensor()` を実装することで
-**torch autograd に対応したカスタムポテンシャル**を定義できます。
+By subclassing `BiasTerm` and implementing `evaluate_tensor()`, you can define a
+**custom potential that supports torch autograd**.
 
-以下の `MorseBiasTerm` は Morse ポテンシャルをバイアス項として実装した例です。
+The `MorseBiasTerm` below is an example of a Morse potential implemented as a bias term.
 
 $$E_{\rm Morse} = D_e \bigl(1 - e^{-a(r - r_e)}\bigr)^2$$
 
-調和ポテンシャルと異なり、$r \to \infty$ で $E \to D_e$ に漸近するため、
-大変位域でも力が発散しません。
+Unlike a harmonic potential, this asymptotes to $E \to D_e$ as $r \to \infty$,
+so forces never diverge even at large displacements.
 
 ```python
 import math
@@ -415,22 +414,22 @@ from ase_biaspot import BiasTerm, BiasCalculator
 
 class MorseBiasTerm(BiasTerm):
     """
-    Morse ポテンシャルバイアス項。
+    Morse potential bias term.
 
     E = D_e * (1 - exp(-a * (r - r_e)))^2
 
     Parameters
     ----------
     name : str
-        ログ出力に使われる識別子。
+        Identifier used in log output.
     i, j : int
-        距離を計算する原子インデックス (0-based)。
+        Atom indices for distance calculation (0-based).
     D_e : float
-        解離エネルギー [eV]。ポテンシャルの上限値。
+        Dissociation energy [eV]. Upper bound of the potential.
     a : float
-        範囲パラメータ [1/Å]。大きいほど井戸が狭い。
+        Range parameter [1/Å]. Larger values give a narrower well.
     r_e : float
-        ポテンシャル最小点の原子間距離 [Å]。
+        Interatomic distance at the potential minimum [Å].
     """
 
     def __init__(self, name: str, i: int, j: int,
@@ -441,15 +440,15 @@ class MorseBiasTerm(BiasTerm):
 
     @property
     def supports_autograd(self) -> bool:
-        return True  # evaluate_tensor() を実装しているので True
+        return True  # evaluate_tensor() is implemented, so True
 
     def evaluate(self, positions, atomic_numbers=None) -> float:
-        """NumPy パス (FD 勾配の基礎)。"""
+        """NumPy path (basis for FD gradient)."""
         r = np.linalg.norm(positions[self.i] - positions[self.j])
         return float(self.D_e * (1.0 - math.exp(-self.a * (r - self.r_e))) ** 2)
 
     def evaluate_tensor(self, positions, atomic_numbers=None):
-        """Torch autograd パス。計算グラフを保持したままエネルギーを返す。"""
+        """Torch autograd path. Returns energy while preserving the computation graph."""
         diff = positions[self.i] - positions[self.j]
         r = torch.linalg.norm(diff)
         return self.D_e * (1.0 - torch.exp(-self.a * (r - self.r_e))) ** 2
@@ -462,13 +461,13 @@ morse = MorseBiasTerm(
     i=0, j=1,
     D_e=1.0,   # eV
     a=3.0,     # 1/Å
-    r_e=1.1,   # Å — EMT 平衡(0.74 Å)より長い目標距離
+    r_e=1.1,   # Å — target distance, longer than EMT equilibrium (0.74 Å)
 )
 
 biased = BiasCalculator(
     base_calculator=EMT(),
     terms=[morse],
-    gradient_mode="auto",  # torch autograd を使用
+    gradient_mode="auto",  # use torch autograd
     verbose=True,
 )
 atoms.calc = biased
@@ -477,32 +476,32 @@ opt = BFGS(atoms, logfile=None)
 opt.run(fmax=0.05, steps=60)
 
 print(f"H-H distance: {atoms.get_distance(0, 1):.4f} Å")
-# => H-H distance: 0.9228 Å  (EMT 平衡 0.74 Å → Morse 最小点 1.1 Å の間で収束)
+# => H-H distance: 0.9228 Å  (converged between EMT equilibrium 0.74 Å and Morse minimum 1.1 Å)
 ```
 
-**Subclassing contract との対応:**
+**Correspondence with the subclassing contract:**
 
-| 要件 | 対応箇所 |
+| Requirement | Where it's met |
 |---|---|
-| `self.name` を `__init__` で設定 | `self.name = name` |
-| `evaluate()` の実装 (NumPy, FD パス) | `np.linalg.norm` + `math.exp` |
-| `supports_autograd = True` を返す | `@property` で `True` |
-| `evaluate_tensor()` の実装 (Torch, autograd パス) | `torch.linalg.norm` + `torch.exp` |
+| Set `self.name` in `__init__` | `self.name = name` |
+| Implement `evaluate()` (NumPy, FD path) | `np.linalg.norm` + `math.exp` |
+| Return `True` from `supports_autograd` | `@property` returning `True` |
+| Implement `evaluate_tensor()` (Torch, autograd path) | `torch.linalg.norm` + `torch.exp` |
 
-> **Note:** `evaluate_tensor()` は必ず rank-0 テンソル (shape=`()`) を返す必要があります。
-> ベクトルを返すと `BiasCalculator` が `TypeError` を送出します。
-> 複数ペアへの寄与を合計する場合は `contributions.sum()` で明示的に縮約してください。
+> **Note:** `evaluate_tensor()` must return a rank-0 tensor (shape=`()`).
+> Returning a vector will cause `BiasCalculator` to raise a `TypeError`.
+> When summing contributions over multiple pairs, reduce explicitly with `contributions.sum()`.
 
 ---
 
 ## Example 7 — Gaussian soft-wall between fragment groups
 
-2 つの原子グループの**重心間距離**に作用するガウス型反発ポテンシャルです。
+A Gaussian repulsion potential acting on the **center-of-mass distance** between two atom groups.
 
 $$E_{\rm Gauss} = A \cdot \exp\!\left(-\frac{r_{\rm cm}^2}{2\sigma^2}\right)$$
 
-フラグメント同士が接近しすぎることを柔らかく防ぐソフトウォールとして機能します。
-$A < 0$ にすると引力バイアスにもなります。
+Acts as a soft wall that gently prevents fragments from getting too close to each other.
+Setting $A < 0$ turns it into an attractive bias.
 
 ```python
 import numpy as np
@@ -517,20 +516,20 @@ from ase_biaspot import BiasTerm, BiasCalculator
 
 class GaussianRepulsionTerm(BiasTerm):
     """
-    重心間距離に作用するガウス型反発ポテンシャル。
+    Gaussian repulsion potential acting on the center-of-mass distance between two groups.
 
     E = A * exp(-r_cm^2 / (2 * sigma^2))
 
     Parameters
     ----------
     name : str
-        識別子。
+        Identifier.
     group_a, group_b : list[int]
-        2 つのフラグメントの原子インデックスリスト。
+        Lists of atom indices for the two fragments.
     A : float
-        ガウスの振幅 [eV]。正 → 反発、負 → 引力。
+        Gaussian amplitude [eV]. Positive → repulsion, negative → attraction.
     sigma : float
-        ガウスの幅 [Å]。
+        Gaussian width [Å].
     """
 
     def __init__(self, name: str, group_a: list[int], group_b: list[int],
@@ -551,20 +550,20 @@ class GaussianRepulsionTerm(BiasTerm):
         return float(self.A * np.exp(-(r**2) / (2.0 * self.sigma**2)))
 
     def evaluate_tensor(self, positions, atomic_numbers=None):
-        # positions の mean を通じて計算グラフが保持される
+        # The computation graph is preserved through the mean of positions
         com_a = positions[self.group_a].mean(dim=0)
         com_b = positions[self.group_b].mean(dim=0)
         r = torch.linalg.norm(com_a - com_b)
         return self.A * torch.exp(-(r**2) / (2.0 * self.sigma**2))
 
 
-# 2 つの H₂ を近距離に配置
+# Place two H₂ molecules at close range
 atoms = Atoms(
     "H4",
     positions=[
         (0.0, 0.0, 0.0),
         (0.7, 0.0, 0.0),
-        (1.5, 0.0, 0.0),  # 重心間距離 1.5 Å — 近接
+        (1.5, 0.0, 0.0),  # center-of-mass distance 1.5 Å — close proximity
         (2.2, 0.0, 0.0),
     ],
 )
@@ -591,11 +590,11 @@ opt.run(fmax=0.05, steps=60)
 r_cm = np.linalg.norm(
     atoms.positions[[0, 1]].mean(axis=0) - atoms.positions[[2, 3]].mean(axis=0)
 )
-print(f"重心間距離: {r_cm:.4f} Å")
-# => 重心間距離: 5.5579 Å  (ガウス反発によって 1.5 Å から押し広げられた)
+print(f"Center-of-mass distance: {r_cm:.4f} Å")
+# => Center-of-mass distance: 5.5579 Å  (pushed apart from 1.5 Å by Gaussian repulsion)
 ```
 
-**複数のバイアス項を組み合わせる例 (Morse + Gaussian):**
+**Example combining multiple bias terms (Morse + Gaussian):**
 
 ```python
 from ase.build import molecule
@@ -603,11 +602,11 @@ from ase.optimize import LBFGS
 
 atoms = molecule("H2O")
 
-# O-H 結合を 1.1 Å に引き伸ばす Morse バイアス (両結合)
+# Morse bias to stretch both O-H bonds toward 1.1 Å
 morse_oh1 = MorseBiasTerm(name="morse_oh1", i=0, j=1, D_e=0.8, a=2.5, r_e=1.1)
 morse_oh2 = MorseBiasTerm(name="morse_oh2", i=0, j=2, D_e=0.8, a=2.5, r_e=1.1)
 
-# H-H 近接を防ぐガウス反発
+# Gaussian repulsion to prevent H-H from getting too close
 gauss_hh = GaussianRepulsionTerm(
     name="gauss_hh", group_a=[1], group_b=[2], A=0.5, sigma=0.8
 )
@@ -623,7 +622,7 @@ atoms.calc = biased
 opt = LBFGS(atoms, logfile=None)
 opt.run(fmax=0.05, steps=80)
 
-print(f"O-H(1): {atoms.get_distance(0, 1):.4f} Å")  # => 1.0992 Å (目標 1.1 Å)
+print(f"O-H(1): {atoms.get_distance(0, 1):.4f} Å")  # => 1.0992 Å (target 1.1 Å)
 print(f"O-H(2): {atoms.get_distance(0, 2):.4f} Å")  # => 1.0992 Å
 print(f"HOH:    {atoms.get_angle(1, 0, 2):.2f}°")   # => 137.77°
 ```

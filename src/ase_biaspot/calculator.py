@@ -207,7 +207,7 @@ class BiasCalculator(Calculator):
         """Return all nn.Parameter tensors from TorchBiasTerm terms."""
         if not _TORCH_AVAILABLE:
             return []
-        params = []
+        params: list[nn.Parameter] = []
         for t in self.terms:
             if isinstance(t, nn.Module):
                 params.extend(t.parameters())

@@ -139,6 +139,7 @@ def _build_afir(name: str, spec: dict[str, Any]) -> AFIRTerm:
         group_b=p["group_b"],
         gamma=p["gamma"],
         power=p.get("power", 6.0),
+        fd_step=p.get("fd_step"),
     )
 
 

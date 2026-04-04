@@ -483,9 +483,9 @@ class CallableTerm(BiasTerm):
         except KeyError as exc:
             missing = exc.args[0] if exc.args else exc
             raise KeyError(
-                f"Term '{self.name}': params missing key {missing!r}. "
-                f"Available params keys: {list(self.params.keys())}. "
-                f"Available vars keys: {list(vars_.keys())}."
+                f"Term '{self.name}': fn raised KeyError for missing key {missing!r}. "
+                f"Available vars keys: {list(vars_.keys())}. "
+                f"Available params keys: {list(self.params.keys())}."
             ) from exc
         except Exception as exc:
             raise RuntimeError(

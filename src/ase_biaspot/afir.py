@@ -225,19 +225,14 @@ def afir_energy(
     float
         AFIR energy in eV.
     """
-    # Early return for trivial cases (zero gamma or empty groups).
-    # The overlap check below is intentionally skipped in these cases:
-    # an empty group has no overlapping indices by definition, and
-    # gamma≈0 produces no force regardless.
-    if abs(gamma) < 1e-15 or not group_a or not group_b:
-        return 0.0
-
-    # Overlap check is intentionally repeated here.  AFIRTerm.__post_init__
-    # already validates this when the function is called via AFIRTerm.evaluate(),
-    # but afir_energy() is also part of the public API and can be called directly
-    # (standalone usage) without going through AFIRTerm, so the guard is needed
-    # at this level too.
+    # Empty groups are always an error regardless of gamma — the public API
+    # must be consistent with AFIRTerm.__post_init__ which also rejects them.
+    # This call raises ValueError for empty or overlapping groups.
     _validate_afir_groups(group_a, group_b, "afir_energy")
+
+    # Early return for near-zero gamma: no force regardless of geometry.
+    if abs(gamma) < 1e-15:
+        return 0.0
 
     alpha = _alpha(gamma)
 

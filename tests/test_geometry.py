@@ -100,7 +100,9 @@ torch = pytest.importorskip("torch", reason="PyTorch not installed")
 # importorskip succeeds for an empty namespace package, but the real torch
 # always exposes torch.Tensor.
 if not hasattr(torch, "Tensor"):
-    pytest.skip("PyTorch is not properly installed (namespace residue detected)", allow_module_level=True)
+    pytest.skip(
+        "PyTorch is not properly installed (namespace residue detected)", allow_module_level=True
+    )
 from ase_biaspot.context import TorchGeometryContext  # noqa: E402
 from ase_biaspot.geometry import (  # noqa: E402
     angle_radian_tensor,

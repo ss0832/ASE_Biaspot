@@ -21,7 +21,9 @@ torch = pytest.importorskip("torch", reason="PyTorch not installed")
 # importorskip succeeds for an empty namespace package, but the real torch
 # always exposes torch.Tensor.
 if not hasattr(torch, "Tensor"):
-    pytest.skip("PyTorch is not properly installed (namespace residue detected)", allow_module_level=True)
+    pytest.skip(
+        "PyTorch is not properly installed (namespace residue detected)", allow_module_level=True
+    )
 
 if TYPE_CHECKING:
     import torch

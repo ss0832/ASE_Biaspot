@@ -184,24 +184,28 @@ def _build_expression_fn(expr: str) -> Callable[[dict, dict], float]:
     Raises
     ------
     ValueError
-        If any key appears in both ``vars_`` and ``params`` when ``_fn`` is
-        called.  This is a **runtime safety-net** guard inside the compiled
-        callable itself.
+        When variable and param names overlap.  **The timing depends on how
+        this function is used:**
 
-        .. note::
-            When ``_build_expression_fn`` is invoked through the normal
-            ``term_from_spec()`` / ``_build_expression_callable()`` path with
-            a string ``"expression"`` key, name conflicts are already detected
-            **at build time** (i.e. when ``term_from_spec()`` is called) by an
-            eager check in ``_build_expression_callable()``.  The runtime check
-            here fires only when the compiled callable is used directly outside
-            that path.
+        * **Build time** (normal usage via ``term_from_spec()``):
+          ``_build_expression_callable()`` performs an eager overlap check
+          *before* calling this function, so ``term_from_spec()`` raises
+          ``ValueError`` immediately at call time — before any atoms are
+          touched or any energy is computed.  This is the fast-fail path
+          that most users encounter.
 
-        Overlapping names would cause ``params`` to silently shadow ``vars_``,
-        producing wrong results without any error.  Use distinct names for
-        variables and parameters to avoid this.
+        * **Evaluation time** (advanced / direct usage):
+          When ``_build_expression_fn`` is called directly and the returned
+          ``_fn`` callable is invoked with conflicting keys, the guard inside
+          ``_fn`` raises ``ValueError``.  This safety-net covers cases where
+          the variable names are not known at build time (e.g. when variable
+          extractors are constructed dynamically after the callable is built).
 
-        Example of the error::
+        Overlapping names cause ``params`` to silently shadow ``vars_``,
+        producing wrong results with no error in the absence of this guard.
+        Use distinct names for variables and parameters to avoid this.
+
+        Example::
 
             # BAD: variable 'r' and param 'r' share the same key
             spec = {
@@ -209,8 +213,8 @@ def _build_expression_fn(expr: str) -> Callable[[dict, dict], float]:
                 "variables": {"r": ...},
                 "params": {"r": 99.0},       # silently wins → always 99.0
             }
-            # → ValueError raised at term_from_spec() (build time) for the
-            #   string expression path, or at _fn() call time otherwise.
+            # → ValueError raised at term_from_spec() call (build time)
+            #   for the normal string-expression path.
 
             # GOOD: keep variable and param names distinct
             spec = {

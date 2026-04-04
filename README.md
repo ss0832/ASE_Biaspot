@@ -3,6 +3,8 @@
 ASE_Biaspot is a Python library for applying user-defined bias potentials
 during ASE geometry optimization.
 
+*ASE_Biaspot (this repository) is the successor to ASE_AFIR (https://github.com/ss0832/ASE_AFIR).
+
 ## Features
 
 - Works with any ASE optimizer (BFGS, LBFGS, FIRE, etc.).

@@ -41,7 +41,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Matches the factual description in `factory._build_expression_callable`
   docstring that was added in 0.1.4.
 
-
+## [0.1.6] — 2026-04-04
 
 ### Fixed
 

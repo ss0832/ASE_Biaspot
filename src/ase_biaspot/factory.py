@@ -392,10 +392,64 @@ def term_from_spec(spec: dict[str, Any]) -> BiasTerm:
     Looks up ``spec["type"]`` in the global registry.  Raises
     ``ValueError`` for unknown types.
 
+    Spec structure
+    --------------
+    Every spec dict must have at least ``"name"`` and ``"type"`` keys.
+    Term-specific parameters are placed under a nested ``"params"`` key —
+    **not** at the top level of the dict:
+
+    .. code-block:: python
+
+        spec = {
+            "name": "my_term",   # required — string identifier
+            "type": "afir",      # required — selects the builder
+            "params": {          # required by most builders — nested dict
+                "group_a": [0],
+                "group_b": [1, 2],
+                "gamma": 50.0,
+            },
+        }
+
+    .. warning::
+        A common mistake is placing term parameters (``group_a``, ``gamma``,
+        etc.) directly at the top level of the spec dict instead of inside
+        ``"params"``.  This raises a ``KeyError: 'params'`` at call time.
+
     Built-in types
     --------------
     ``"afir"``
         AFIR artificial-force bias.  Fully JSON/YAML-serialisable.
+
+        Required ``params`` keys: ``group_a`` (list[int]), ``group_b``
+        (list[int]), ``gamma`` (float, kJ/mol).
+        Optional: ``power`` (float, default 6.0).
+
+        .. code-block:: python
+
+            spec = {
+                "name": "push_together",
+                "type": "afir",
+                "params": {"group_a": [0], "group_b": [1, 2], "gamma": 50.0},
+            }
+
+    ``"expression_callable"``
+        Bias defined by a string expression (e.g. ``"k * (r - r0) ** 2"``).
+        Provide either an ``"expression"`` key (string — JSON/YAML-serialisable)
+        or a ``"callable"`` key (Python callable — not serialisable).
+        Variables (``vars_``) and params are merged into one namespace for the
+        expression.  Variable names and param names must not overlap.
+
+        .. code-block:: python
+
+            spec = {
+                "name": "angle_restraint",
+                "type": "expression_callable",
+                "expression": "k * (th - th0) ** 2",
+                "variables": {
+                    "th": {"type": "angle", "atoms": [1, 0, 2], "unit": "deg"}
+                },
+                "params": {"k": 0.05, "th0": 90.0},
+            }
 
     ``"callable"``
         User-defined Python callable ``(vars_, params) -> float``.
@@ -404,13 +458,6 @@ def term_from_spec(spec: dict[str, Any]) -> BiasTerm:
         Both ``"callable"`` and ``"expression_callable"`` are fully supported;
         neither is deprecated.  Choose whichever fits your workflow.
 
-    ``"expression_callable"``
-        Bias defined by a string expression (e.g. ``"k * (r - r0) ** 2"``).
-        Provide either an ``"expression"`` key (string — JSON/YAML-serialisable)
-        or a ``"callable"`` key (Python callable — not serialisable).
-        Variables (``vars_``) and params are merged into one namespace for the
-        expression.
-
     ``"torch_callable"`` / ``"torch_afir"``
         Torch-native terms (requires PyTorch).  Not JSON/YAML-serialisable.
 
@@ -418,6 +465,7 @@ def term_from_spec(spec: dict[str, Any]) -> BiasTerm:
     ----------
     spec : dict
         Must contain at least ``"name"`` and ``"type"`` keys.
+        Term-specific arguments go under the nested ``"params"`` key.
 
     Returns
     -------

@@ -190,7 +190,52 @@ class BiasTerm(ABC):
         variables: dict[str, VariableFunction] | None = None,
         params: dict[str, Any] | None = None,
     ) -> CallableTerm:
-        """Create a :class:`CallableTerm` from a user-defined callable."""
+        """Create a :class:`CallableTerm` from a user-defined callable.
+
+        This is the **recommended** way to build a callable bias term.
+        It is equivalent to constructing :class:`CallableTerm` directly but
+        provides a more concise call signature.
+
+        Parameters
+        ----------
+        name : str
+            Identifier used in log output and CSV columns.
+        fn : callable
+            ``(vars_: dict, params: dict) -> float``
+
+            The two arguments passed to *fn* at each evaluation step are:
+
+            * ``vars_`` — values produced by running each extractor in
+              *variables* against the current :class:`GeometryContext`.
+              Keys match those in the *variables* dict.  If *variables* is
+              empty, ``vars_`` will be an empty dict.
+            * ``params`` — the *params* dict, forwarded unchanged.
+
+        variables : dict[str, callable] or None
+            Geometry extractors, each a callable
+            ``(ctx: GeometryContext) -> scalar``.  Built-in helpers such as
+            ``ctx.distance(i, j)``, ``ctx.angle(i, j, k)``, and
+            ``ctx.dihedral(i, j, k, l)`` can be used directly as extractors.
+            Defaults to ``{}`` (empty — ``vars_`` will always be ``{}``).
+        params : dict[str, Any] or None
+            Arbitrary keyword parameters forwarded verbatim to *fn*.
+            Defaults to ``{}`` (empty).
+
+        Returns
+        -------
+        CallableTerm
+
+        Examples
+        --------
+        .. code-block:: python
+
+            term = BiasTerm.from_callable(
+                name="harmonic_distance",
+                fn=lambda v, p: p["k"] * (v["r"] - p["r0"]) ** 2,
+                variables={"r": lambda ctx: ctx.distance(0, 1)},
+                params={"k": 5.0, "r0": 0.5},
+            )
+        """
         return CallableTerm(name=name, fn=fn, variables=variables or {}, params=params or {})
 
     @classmethod
@@ -332,24 +377,83 @@ class CallableTerm(BiasTerm):
     To enable autograd for a custom term, subclass :class:`BiasTerm` directly,
     implement ``evaluate_tensor()``, and set ``supports_autograd = True``.
 
+    .. tip::
+        The recommended way to create a ``CallableTerm`` is via the class method
+        :meth:`BiasTerm.from_callable`, which provides the same interface with a
+        more concise call signature::
+
+            term = BiasTerm.from_callable(
+                name="harmonic",
+                fn=lambda v, p: p["k"] * (v["r"] - p["r0"]) ** 2,
+                variables={"r": lambda ctx: ctx.distance(0, 1)},
+                params={"k": 5.0, "r0": 0.5},
+            )
+
     Parameters
     ----------
     name : str
         Identifier used in log output.
     fn : callable
         ``(vars_: dict, params: dict) -> float``
-        Must return a scalar (Python float, scalar numpy array, or scalar
+
+        Called once per energy evaluation.  The two arguments are:
+
+        * ``vars_`` — a ``dict`` whose keys and values are determined by the
+          ``variables`` mapping.  Before ``fn`` is called, each extractor
+          function in ``variables`` is invoked with a :class:`GeometryContext`
+          object, and the result is stored under the corresponding key.
+          For example, if ``variables={"r": lambda ctx: ctx.distance(0, 1)}``,
+          then ``vars_["r"]`` will be the interatomic distance between atoms 0
+          and 1 (in Å).  If ``variables`` is empty (the default), ``vars_``
+          will be an empty dict and ``fn`` must not reference it.
+        * ``params`` — the ``params`` dict passed at construction time,
+          forwarded unchanged.
+
+        ``fn`` must return a scalar (Python float, scalar numpy array, or scalar
         torch.Tensor via ``.item()``). Multi-element arrays or tensors raise
         ``TypeError``. For torch autograd, use :class:`TorchCallableTerm` instead.
     variables : dict[str, VariableFunction]
-        Geometry extractors keyed by variable name fed to *fn*.
+        Geometry extractor functions, keyed by the variable name that will
+        appear in ``vars_`` when ``fn`` is called.  Each value must be a
+        callable ``(ctx: GeometryContext) -> scalar``.  Built-in helpers
+        (``ctx.distance``, ``ctx.angle``, ``ctx.dihedral``, etc.) can be used
+        directly as extractors.  Defaults to an empty dict.
     params : dict[str, Any]
-        Parameters forwarded to *fn*.
+        Arbitrary parameters forwarded verbatim to *fn* as its second argument.
+        Defaults to an empty dict.
     fd_step : float or None, optional
         Step size (Å) for central-difference differentiation.
         ``None`` (default) uses the step size set on ``BiasCalculator``.
         Tune this if the potential energy scale is very large (kJ/mol order)
         and FD accuracy is insufficient.
+
+    Examples
+    --------
+    Harmonic distance restraint pulling atoms 0 and 1 toward 0.5 Å:
+
+    .. code-block:: python
+
+        from ase_biaspot import BiasTerm, BiasCalculator
+
+        term = BiasTerm.from_callable(          # preferred constructor
+            name="harmonic",
+            fn=lambda v, p: p["k"] * (v["r"] - p["r0"]) ** 2,
+            variables={"r": lambda ctx: ctx.distance(0, 1)},
+            params={"k": 5.0, "r0": 0.5},
+        )
+
+    Equivalent construction using ``CallableTerm`` directly:
+
+    .. code-block:: python
+
+        from ase_biaspot.core import CallableTerm
+
+        term = CallableTerm(
+            name="harmonic",
+            fn=lambda v, p: p["k"] * (v["r"] - p["r0"]) ** 2,
+            variables={"r": lambda ctx: ctx.distance(0, 1)},
+            params={"k": 5.0, "r0": 0.5},
+        )
     """
 
     name: str

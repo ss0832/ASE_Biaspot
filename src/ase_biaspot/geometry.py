@@ -45,23 +45,23 @@ if TYPE_CHECKING:
 
 
 # ── Numerical thresholds ──────────────────────────────────────────────────────
-# NumPy パスで「ほぼゼロ」とみなすノルム閾値 (Å)
+# Norm threshold considered "near zero" in the NumPy path (Å)
 _NUMPY_NEAR_ZERO: float = 1e-16
 
-# Torch パスで縮退幾何を検出する閾値 (Å)
-# NumPy より緩い値にしている理由: float64 の精度と .item() 比較のコストとのトレードオフ
+# Threshold for detecting degenerate geometry in the Torch path (Å)
+# Reason for a looser value than NumPy: Trade-off between float64 precision and the cost of .item() comparisons
 _TORCH_COLLINEAR_THRESHOLD: float = 1e-8
 
-# Torch パスの分母 clamp 閾値 (Å または Å²)
-# angle/dihedral/out_of_plane の除算でゼロ割りを防ぐ
+# Denominator clamp threshold for the Torch path (Å or Å²)
+# Prevents division by zero in angle/dihedral/out_of_plane calculations
 _TORCH_DENOM_CLAMP: float = 1e-12
 
-# distance_tensor の squared norm に使う clamp 閾値 (Å²)
-# sqrt(1e-24) ≈ 3e-12 Å — 物理的な距離として生じることがない値
+# Clamp threshold used for the squared norm of distance_tensor (Å²)
+# sqrt(1e-24) ≈ 3e-12 Å — A value that would never occur as a physical distance
 _TORCH_DIST_SQ_CLAMP: float = 1e-24
 
-# acos / asin の引数を [-1+m, 1-m] にクランプするマージン
-# 値域外への微小はみ出しによる NaN 勾配を防ぐ
+# Margin for clamping acos / asin arguments to [-1+m, 1-m]
+# Prevents NaN gradients caused by minute excursions outside the valid domain
 _COS_CLAMP_MARGIN: float = 1e-7
 
 

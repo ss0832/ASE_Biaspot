@@ -1,0 +1,147 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ase-biaspot"
+version = "0.1.1"
+description = "User-defined bias potentials for ASE geometry optimization with learnable weights (nn.Parameter), torch/autograd and numerical fallback."
+readme = "README.md"
+license = "GPL-3.0-only"
+keywords = [
+    "quantum chemistry",
+    "geometry optimization",
+    "bias potential",
+    "AFIR",
+    "machine learning potentials",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+requires-python = ">=3.10"
+authors = [
+    { name = "ss0832" },
+]
+dependencies = [
+    "ase>=3.22.1",
+    "numpy>=1.24",
+    "torch>=2.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+docs = [
+    "sphinx>=7.3",
+    "sphinx-book-theme>=1.1",
+    "myst-parser>=3.0",
+]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where   = ["src"]
+include = ["ase_biaspot*"]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths  = ["tests"]
+addopts    = "-q --tb=short"
+pythonpath = ["src"]
+
+# ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["ase_biaspot"]
+omit   = ["tests/*", "examples/*", "docs/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+# fail_under is intentionally not set here.
+# The 80% threshold is enforced only on the torch CI job (see .github/workflows/ci.yml)
+# because the no-torch job structurally cannot cover torch-specific code paths.
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length    = 100
+target-version = "py310"
+# Directories ruff should check when invoked as `ruff check .`
+src = ["src", "tests"]
+exclude = [
+    "docs",
+	"examples",
+    ".github",
+    "__pycache__",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade (modern Python syntax)
+    "B",   # flake8-bugbear (potential bugs and design issues)
+    "PT",  # flake8-pytest-style (pytest best practices)
+    "PIE", # flake8-pie (unnecessary code / noise removal)
+    "RUF", # Ruff-specific rules
+]
+ignore = [
+    "E501",   # line too long — handled by the formatter
+    "PT011",  # pytest.raises(ValueError) match= — too noisy for broad value-error tests
+    "E741",   # ambiguous variable name (l, O, I) — conventional in chemistry code
+    # RUF001/002/003: this codebase uses Unicode math symbols (α, ω, Å, …)
+    # intentionally in docstrings and comments for scientific readability.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    # RUF022: __all__ is grouped by API category, not sorted alphabetically.
+    "RUF022",
+]
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.10"
+mypy_path      = ["src"]
+
+# Source package: enforce strict typing
+check_untyped_defs    = true
+disallow_untyped_defs = true
+warn_unused_ignores   = true
+
+# Third-party libraries without stubs
+[[tool.mypy.overrides]]
+module = ["ase.*", "scipy.*"]
+ignore_missing_imports = true
+
+# torch ships its own stubs; tolerate version mismatches
+[[tool.mypy.overrides]]
+module = ["torch.*"]
+ignore_missing_imports = true
+
+# Tests: check bodies but don't require full annotations on fixtures/helpers
+[[tool.mypy.overrides]]
+module                = ["tests.*"]
+disallow_untyped_defs = false
+warn_unused_ignores   = false

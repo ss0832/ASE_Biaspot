@@ -8,8 +8,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.8] — 2026-04-04
 
-### Fix
-- Fix some small issues
+### Fixed
+
+- **Error message and exception handling improvements** — inconsistencies in
+  error-handling paths identified after the 0.1.7 release have been corrected.
+
+  - `BiasCalculator.__init__()`: `ValueError` for an invalid `gradient_mode`
+    now explicitly lists the accepted values (`'auto'`, `'torch'`, `'fd'`) in
+    the message; previously the wording diverged from the documented API.
+
+  - `CallableTerm.evaluate()`: the `RuntimeError` wrapper raised when a
+    user-provided `fn` throws an unexpected exception now includes the
+    originating exception type and message inline, making tracebacks readable
+    without having to inspect the chained `__cause__`.
+
+  - `_autograd_energy_and_gradient()`: wording of the `TypeError` raised when
+    `evaluate_tensor()` returns a non-scalar tensor unified with the
+    corresponding error in `_compute_bias()`.
+
+  - `term_from_spec()`: a missing `'type'` key previously surfaced as a bare
+    `KeyError: 'type'` with no context; now raises an explicit `KeyError` with
+    a descriptive message.
+
+  - `_validate_afir_groups()`: overlapping indices in the error message are now
+    sorted, making output deterministic in tests and log files.
 
 ---
 

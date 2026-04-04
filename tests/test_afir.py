@@ -89,10 +89,13 @@ def test_afir_energy_decreases_with_distance():
     assert e_far > e_close
 
 
-def test_afir_energy_empty_group_returns_zero(two_hydrogen_atoms):
+def test_afir_energy_empty_group_raises(two_hydrogen_atoms):
+    """afir_energy() must raise ValueError for empty groups (Bug 1 fix)."""
     pos, nums = two_hydrogen_atoms
-    e = afir_energy(pos, nums, group_a=[], group_b=[1], gamma=5.0)
-    assert e == 0.0
+    with pytest.raises(ValueError, match="non-empty"):
+        afir_energy(pos, nums, group_a=[], group_b=[1], gamma=5.0)
+    with pytest.raises(ValueError, match="non-empty"):
+        afir_energy(pos, nums, group_a=[0], group_b=[], gamma=5.0)
 
 
 def test_afir_energy_multi_atom():

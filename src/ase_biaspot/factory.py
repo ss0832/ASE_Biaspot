@@ -184,7 +184,19 @@ def _build_expression_fn(expr: str) -> Callable[[dict, dict], float]:
     Raises
     ------
     ValueError
-        At *call time*, if any key appears in both ``vars_`` and ``params``.
+        If any key appears in both ``vars_`` and ``params`` when ``_fn`` is
+        called.  This is a **runtime safety-net** guard inside the compiled
+        callable itself.
+
+        .. note::
+            When ``_build_expression_fn`` is invoked through the normal
+            ``term_from_spec()`` / ``_build_expression_callable()`` path with
+            a string ``"expression"`` key, name conflicts are already detected
+            **at build time** (i.e. when ``term_from_spec()`` is called) by an
+            eager check in ``_build_expression_callable()``.  The runtime check
+            here fires only when the compiled callable is used directly outside
+            that path.
+
         Overlapping names would cause ``params`` to silently shadow ``vars_``,
         producing wrong results without any error.  Use distinct names for
         variables and parameters to avoid this.
@@ -197,8 +209,8 @@ def _build_expression_fn(expr: str) -> Callable[[dict, dict], float]:
                 "variables": {"r": ...},
                 "params": {"r": 99.0},       # silently wins → always 99.0
             }
-            # → ValueError: expression_callable: variable and param names
-            #               overlap: ['r']. Use distinct names …
+            # → ValueError raised at term_from_spec() (build time) for the
+            #   string expression path, or at _fn() call time otherwise.
 
             # GOOD: keep variable and param names distinct
             spec = {
@@ -323,11 +335,12 @@ def _build_expression_callable(name: str, spec: dict[str, Any]) -> CallableTerm:
     ValueError
         If neither ``"expression"`` nor ``"callable"`` is present.
     ValueError
-        At *build time* via term_from_spec() (string expression form only), if any key appears
-        in both ``"variables"`` and ``"params"``.  Variables and parameters
-        are merged into a single namespace for expression evaluation; shared
-        keys would cause the parameter value to silently overwrite the
-        geometry-derived value, producing wrong results.  Use distinct names::
+        At *build time* (when ``term_from_spec()`` is called) for the string
+        expression form, if any key appears in both ``"variables"`` and
+        ``"params"``.  Variables and parameters are merged into a single
+        namespace for expression evaluation; shared keys would cause the
+        parameter value to silently overwrite the geometry-derived value,
+        producing wrong results.  Use distinct names::
 
             # BAD — 'r' appears in both variables and params
             spec = {
@@ -342,6 +355,12 @@ def _build_expression_callable(name: str, spec: dict[str, Any]) -> CallableTerm:
                 "variables": {"r": {"type": "distance", "atoms": [0, 1]}},
                 "params": {"k": 1.0, "r0": 1.5},
             }
+
+        .. note::
+            For the ``"callable"`` (Python callable) form the overlap check
+            fires at *evaluation time* (inside the callable itself) rather
+            than at build time, because the variable names are not known until
+            ``evaluate()`` is called.
     TypeError
         If ``"callable"`` is present but not actually callable.
     """

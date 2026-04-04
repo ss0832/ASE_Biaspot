@@ -718,9 +718,22 @@ if _TORCH_AVAILABLE:
             Identifier used in log output.
         group_a, group_b : list[int]
             0-based atom indices for fragments A and B (non-overlapping).
-        gamma_init : float
+        gamma_init : float or nn.Parameter
             Initial value of the AFIR gamma parameter (kJ/mol).
             Stored as ``self.gamma_param`` (``nn.Parameter``, float64).
+
+            Accepts either a plain ``float`` (a fresh ``nn.Parameter`` is
+            created internally) **or** an existing ``nn.Parameter`` (used
+            directly without copying, so ``term.parameters()`` yields the
+            same object the caller holds).  Passing an ``nn.Parameter`` is
+            the recommended pattern when you need to monitor or update
+            ``gamma`` from outside ``BiasCalculator``::
+
+                gamma = nn.Parameter(torch.tensor(3.0, dtype=torch.float64))
+                term  = TorchAFIRTerm(..., gamma_init=gamma)
+                # term.gamma_param is gamma — same object, not a copy.
+                opt = torch.optim.Adam(term.parameters(), lr=0.1)
+                # opt now updates the same tensor the caller holds.
 
             .. warning::
                Initializing with ``gamma_init=0`` (or very close to zero) is
@@ -735,8 +748,8 @@ if _TORCH_AVAILABLE:
             Threshold below which a ``UserWarning`` is emitted (default: 0.1 kJ/mol).
             Set to 0.0 to suppress the warning.
 
-        Example
-        -------
+        Example — float initialisation (most common)
+        --------------------------------------------
         ::
 
             import torch
@@ -753,6 +766,21 @@ if _TORCH_AVAILABLE:
 
             opt = torch.optim.Adam(term.parameters(), lr=0.1)
             opt.step(); opt.zero_grad()
+
+        Example — nn.Parameter passthrough (external monitoring)
+        ---------------------------------------------------------
+        ::
+
+            import torch, torch.nn as nn
+            from ase_biaspot import TorchAFIRTerm
+
+            gamma = nn.Parameter(torch.tensor(3.0, dtype=torch.float64))
+            term  = TorchAFIRTerm(name="afir", group_a=[0], group_b=[1],
+                                  gamma_init=gamma)
+            assert term.gamma_param is gamma   # same object — no copy made
+
+            opt = torch.optim.Adam(term.parameters(), lr=0.1)
+            # opt.step() updates `gamma` in-place; the caller can inspect it.
         """
 
         def __init__(
@@ -760,11 +788,11 @@ if _TORCH_AVAILABLE:
             name: str,
             group_a: list[int],
             group_b: list[int],
-            gamma_init: float | None = None,
+            gamma_init: float | nn.Parameter | None = None,
             power: float = 6.0,
             gamma_min_abs: float = 0.1,
             *,
-            gamma: float | None = None,
+            gamma: float | nn.Parameter | None = None,
         ) -> None:
             # ``gamma`` is a convenience alias for ``gamma_init`` so that
             # ``TorchAFIRTerm(gamma=5.0)`` works the same way as
@@ -785,11 +813,29 @@ if _TORCH_AVAILABLE:
             self.group_b = list(group_b)
             # Validate non-empty and disjoint groups at construction time.
             _validate_afir_groups(self.group_a, self.group_b, f"TorchAFIRTerm '{name}'")
-            if gamma_min_abs > 0.0 and abs(gamma_init) < gamma_min_abs:
-                import warnings as _warnings
 
-                _warnings.warn(
-                    f"TorchAFIRTerm '{name}': gamma_init={gamma_init:.3g} kJ/mol is very "
+            # ── Resolve gamma value and build self.gamma_param ────────────────
+            # When the caller passes an existing nn.Parameter we store it
+            # directly without creating a copy.  This guarantees that
+            # ``term.parameters()`` yields the *same* Python object, so an
+            # external optimizer (e.g. Adam(term.parameters())) updates the
+            # tensor the caller holds and its ``.grad`` attribute is populated
+            # correctly after each BiasCalculator step.
+            #
+            # When a plain float (or any non-Parameter value) is passed we
+            # create a fresh nn.Parameter as before.
+            if isinstance(gamma_init, nn.Parameter):
+                # Use the caller's Parameter directly — no float() conversion,
+                # no copy, no graph detachment.
+                _gamma_scalar = float(gamma_init.detach())
+                self.gamma_param = gamma_init
+            else:
+                _gamma_scalar = float(gamma_init)
+                self.gamma_param = nn.Parameter(torch.tensor(_gamma_scalar, dtype=torch.float64))
+
+            if gamma_min_abs > 0.0 and abs(_gamma_scalar) < gamma_min_abs:
+                warnings.warn(
+                    f"TorchAFIRTerm '{name}': gamma_init={_gamma_scalar:.3g} kJ/mol is very "
                     f"close to zero (|gamma| < {gamma_min_abs} kJ/mol). "
                     "The gradient ∂alpha/∂gamma diverges near gamma=0, which may cause "
                     "optimizer instability. Consider initializing with a non-zero value "
@@ -797,7 +843,6 @@ if _TORCH_AVAILABLE:
                     UserWarning,
                     stacklevel=2,
                 )
-            self.gamma_param = nn.Parameter(torch.tensor(float(gamma_init), dtype=torch.float64))
             self.power = float(power)
 
         def evaluate_tensor(

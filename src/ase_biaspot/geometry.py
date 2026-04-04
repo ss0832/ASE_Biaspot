@@ -189,6 +189,35 @@ def dihedral_radian(positions: np.ndarray, i: int, j: int, k: int, l: int) -> fl
         If any index is out of range ``[0, N)``.
     ValueError
         If any two indices are identical.
+
+    .. warning:: Harmonic restraints near ±π — discontinuity at the boundary
+
+        The returned angle lies in the **half-open interval (−π, π]**.
+        A simple harmonic restraint ``k * (phi - phi0) ** 2`` is therefore
+        **discontinuous** near ``±π``: when the true angular distance between
+        the dihedral and the target is small but the two values straddle the
+        ±π branch cut (e.g. ``phi = −2.97 rad`` and ``phi0 = +2.97 rad``),
+        the restraint energy evaluates to ``k * (−2.97 − 2.97)² = k * 35.0``
+        instead of the expected ``k * (0.06)² ≈ 0``.
+
+        **When to be cautious:** Any target angle ``|phi0| > ~2.5 rad`` (> ~143°)
+        or any simulation where the dihedral might rotate through ±π.
+
+        **Alternatives:**
+
+        * Use a cosine-based restraint that is periodic and free of
+          branch-cut artifacts::
+
+              k * (1 - math.cos(phi - phi0))      # range [0, 2k], minimum at phi0
+
+        * Wrap the difference into ``(−π, π]`` before squaring::
+
+              import math
+              def wrapped_harmonic(v, p):
+                  diff = v["phi"] - p["phi0"]
+                  # wrap diff to (−π, π]
+                  diff = (diff + math.pi) % (2 * math.pi) - math.pi
+                  return p["k"] * diff ** 2
     """
     validate_indices([i, j, k, l], positions.shape[0])
     b0 = positions[i] - positions[j]
@@ -212,7 +241,8 @@ def dihedral_degree(positions: np.ndarray, i: int, j: int, k: int, l: int) -> fl
     """Dihedral angle (degrees) defined by atoms *i*–*j*–*k*–*l*.
 
     Convenience wrapper around :func:`dihedral_radian` that converts the
-    result to degrees.  See that function for parameter and exception details.
+    result to degrees.  See that function for parameter, exception, and
+    **branch-cut / harmonic-restraint discontinuity** details.
     """
     return math.degrees(dihedral_radian(positions, i, j, k, l))
 
@@ -326,6 +356,14 @@ def dihedral_radian_tensor(positions: torch.Tensor, i: int, j: int, k: int, l: i
         The return value and gradient remain numerically defined (via clamp)
         but should not be trusted. Consider not using this coordinate for
         linear bonds.
+
+    .. warning:: Harmonic restraints near ±π — discontinuity at the boundary
+
+        The returned angle lies in ``(−π, π]``.  A simple harmonic restraint
+        ``k * (phi - phi0) ** 2`` is **discontinuous** when the dihedral
+        straddles the ±π branch cut.  See :func:`dihedral_radian` for a full
+        explanation and recommended alternatives (cosine restraint or wrapped
+        harmonic).
     """
     require_torch("dihedral_radian_tensor")
     import torch
@@ -391,7 +429,11 @@ def dihedral_radian_tensor(positions: torch.Tensor, i: int, j: int, k: int, l: i
 
 
 def dihedral_degree_tensor(positions: torch.Tensor, i: int, j: int, k: int, l: int) -> torch.Tensor:
-    """Dihedral angle (degrees) as a differentiable Torch scalar."""
+    """Dihedral angle (degrees) as a differentiable Torch scalar.
+
+    Convenience wrapper around :func:`dihedral_radian_tensor`.  See that
+    function for the **branch-cut / harmonic-restraint discontinuity** warning.
+    """
     require_torch("dihedral_degree_tensor")
     return dihedral_radian_tensor(positions, i, j, k, l) * (180.0 / math.pi)
 

@@ -41,29 +41,15 @@ jobs:
     name: Type-check (mypy)
     needs: lint
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # Run both with and without torch so we verify stub coverage in each env
-        include:
-          - python-version: "3.12"
-            torch: "false"
-          - python-version: "3.12"
-            torch: "true"
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
-      - name: Install (no torch)
-        if: matrix.torch == 'false'
-        run: pip install -e ".[dev]"
-
-      - name: Install (with torch)
-        if: matrix.torch == 'true'
+      - name: Install
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[dev]"
@@ -92,7 +78,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install (no torch)
-        run: pip install -e ".[dev]"
+        # torch is now a required dependency, so we install everything via the
+        # CPU wheel (fast), then remove torch to simulate a no-torch environment.
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]"
+          pip uninstall torch -y
 
       - name: Run pytest with coverage
         run: |
@@ -129,7 +120,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install (with torch)
-        # Use CPU-only wheel to keep install time short
+        # Pre-install the CPU-only wheel to avoid pulling a CUDA wheel from PyPI,
+        # then install the package (pip reuses the already-satisfied torch requirement).
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[dev]"

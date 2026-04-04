@@ -748,8 +748,10 @@ if _TORCH_AVAILABLE:
             Threshold below which a ``UserWarning`` is emitted (default: 0.1 kJ/mol).
             Set to 0.0 to suppress the warning.
 
-        Example — float initialisation (most common)
-        --------------------------------------------
+        Examples
+        --------
+        .. rubric:: Float initialisation (most common)
+
         ::
 
             import torch
@@ -767,8 +769,8 @@ if _TORCH_AVAILABLE:
             opt = torch.optim.Adam(term.parameters(), lr=0.1)
             opt.step(); opt.zero_grad()
 
-        Example — nn.Parameter passthrough (external monitoring)
-        ---------------------------------------------------------
+        .. rubric:: ``nn.Parameter`` passthrough (external monitoring)
+
         ::
 
             import torch, torch.nn as nn

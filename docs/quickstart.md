@@ -388,6 +388,146 @@ step, E_base, E_bias_total, E_total, Fmax, bias_<term_name>, ...
 
 ---
 
+
+## Example 5 — Claisen rearrangement TS search with Psi4 + AFIR
+
+This example shows how to use ASE_Biaspot with a real quantum-chemistry
+calculator ([Psi4](https://psicode.org/)) to search for the transition state
+of an allyl vinyl ether **Claisen rearrangement** ([3,3]-sigmatropic).
+
+The AFIR term pushes the reacting fragments together, nudging the system
+away from the reactant minimum and toward the TS region without requiring
+an initial guess for the product geometry.
+
+### Prerequisites
+
+```bash
+#After installing psi4
+pip install ase-biaspot   # with torch for autograd forces
+```
+
+### Step 1 — AFIR-biased geometry optimization
+
+```python
+# claisen_afir.py
+#
+# AFIR-driven geometry optimisation for the Claisen rearrangement of
+# allyl vinyl ether → pent-4-enal  ([3,3] sigmatropic shift).
+#
+# 0-based atom index map
+# ──────────────────────
+#  idx  sym  role in Claisen 6-membered TS
+#   0    C   C2  vinyl carbon attached to O  (=CH–O)
+#   1    O   O3  ether oxygen
+#   2    C   C4  allyl methylene attached to O  (–CH₂–)   ← breaking bond (1–2)
+#   3    C   C5  allyl middle carbon  (=CH–)
+#   4    C   C6  allyl terminal carbon  (=CH₂)             ← forming bond (4–5)
+#   5    C   C1  vinyl terminal carbon  (=CH₂)             ← forming bond (4–5)
+#  6–13  H   hydrogens
+#
+# Claisen [3,3] key bonds
+# ───────────────────────
+#   forming : C1 (idx 5) ··· C6 (idx 4)   new C–C bond (reactant d ≈ 4.84 Å)
+#   breaking: O3 (idx 1) –– C4 (idx 2)   C–O bond cleaves (reactant d ≈ 1.43 Å)
+
+import numpy as np
+from ase import Atoms
+from ase.calculators.psi4 import Psi4
+from ase.io import write
+from ase.optimize import LBFGS
+
+from ase_biaspot import AFIRTerm, BiasCalculator
+
+# ── Build the allyl vinyl ether reactant from coordinates ────────────────────
+
+symbols = [
+    "C", "O", "C", "C", "C", "C",          # 0–5  heavy atoms
+    "H", "H", "H", "H", "H", "H", "H", "H",  # 6–13 hydrogens
+]
+positions = np.array([
+    [-0.03989051, -1.44876143, -4.10172098],  #  0: C2  vinyl (–O side)
+    [-0.24675417, -0.16352192, -4.69355444],  #  1: O3  ether oxygen
+    [ 0.99900999,  0.34386140, -5.17887270],  #  2: C4  allyl methylene (–O side)
+    [ 1.99215654,  0.47134851, -4.00882699],  #  3: C5  allyl middle
+    [ 3.32183313,  0.33200893, -4.23043860],  #  4: C6  allyl terminal  ← new bond
+    [-0.83456106, -1.86233332, -3.08485125],  #  5: C1  vinyl terminal  ← new bond
+    [ 0.74232880, -2.08390788, -4.46175144],  #  6: H
+    [-0.67977551, -2.82401638, -2.64201141],  #  7: H
+    [-1.61677881, -1.22718586, -2.72481917],  #  8: H
+    [ 1.39589792, -0.32674955, -5.91212635],  #  9: H
+    [ 0.84422389,  1.30554411, -5.62171311],  # 10: H
+    [ 1.63235197,  0.66994296, -3.02089940],  # 11: H
+    [ 3.68163775,  0.13341526, -5.21836632],  # 12: H
+    [ 4.01187671,  0.42059024, -3.41748521],  # 13: H
+])
+
+atoms = Atoms(symbols=symbols, positions=positions)
+
+# ── QM calculator: B3LYP/6-31G* via Psi4 ────────────────────────────────────
+
+qm_calc = Psi4(
+    atoms=atoms,
+    method="b3lyp",
+    basis="6-31g*",
+    memory="4GB",
+    num_threads=4,
+)
+
+# ── AFIR bias term ────────────────────────────────────────────────────────────
+#
+# group_a — allyl fragment   : C4, C5, C6  (indices 2, 3, 4)
+# group_b — vinyl ether part : C1, C2, O3  (indices 5, 0, 1)
+#
+# gamma = 150 kJ/mol pushes the two fragments together along the reaction
+# coordinate.  Increase to 200–250 kJ/mol if the system does not reach
+# the TS vicinity within 300 steps.
+
+afir_term = AFIRTerm(
+    name="claisen_afir",
+    group_a=[2, 3, 4],   # allyl fragment  (C4–CH₂, C5=CH–, C6=CH₂)
+    group_b=[0, 1, 5],   # vinyl ether fragment  (C2=CH–, O3, C1=CH₂)
+    gamma=150.0,          # kJ/mol — positive: push together
+    power=6.0,
+)
+
+biased = BiasCalculator(
+    base_calculator=qm_calc,
+    terms=[afir_term],
+    gradient_mode="auto",   # torch autograd if available, else FD
+    verbose=True,
+    csv_log_path="claisen_afir.csv",
+)
+atoms.calc = biased
+
+# ── Optimisation ──────────────────────────────────────────────────────────────
+
+opt = LBFGS(atoms, trajectory="claisen_afir.traj", logfile="claisen_afir.log")
+opt.run(fmax=0.05, steps=300)
+
+# ── Save AFIR-optimised structure (TS vicinity / approximate product) ─────────
+
+write("claisen_afir_product.xyz", atoms)
+print("AFIR optimisation complete.")
+```
+
+> **Tip — choosing gamma:**
+> Start with γ = 100 kJ/mol.  If the reaction does not occur within ~200 steps,
+> increase to 150–200 kJ/mol.  Very large values (> 400 kJ/mol) can distort bond
+> lengths significantly; use them only as a last resort.
+
+### Step 2 — Locate the transition state with NEB
+
+Convert the AFIR trajectory to a set of images and run a climbing-image NEB
+to locate the true TS between the reactant and the AFIR product.
+
+> **Converting trajectories:** To extract individual frames for NEB from an
+> ASE `.traj` file use:
+> ```bash
+> ase convert claisen_afir.traj claisen_afir.xyz
+> ```
+
+---
+
 ## Example 6 — Custom BiasTerm with autograd: Morse potential
 
 By subclassing `BiasTerm` and implementing `evaluate_tensor()`, you can define a
@@ -644,143 +784,6 @@ print(f"HOH:    {atoms.get_angle(1, 0, 2):.2f}°")   # => 137.77°
 | Register a new dict type | `@register("my_type")` |
 
 ---
-
-## Example 5 — Claisen rearrangement TS search with Psi4 + AFIR
-
-This example shows how to use ASE_Biaspot with a real quantum-chemistry
-calculator ([Psi4](https://psicode.org/)) to search for the transition state
-of an allyl vinyl ether **Claisen rearrangement** ([3,3]-sigmatropic).
-
-The AFIR term pushes the reacting fragments together, nudging the system
-away from the reactant minimum and toward the TS region without requiring
-an initial guess for the product geometry.
-
-### Prerequisites
-
-```bash
-#After installing psi4
-pip install ase-biaspot   # with torch for autograd forces
-```
-
-### Step 1 — AFIR-biased geometry optimization
-
-```python
-# claisen_afir.py
-#
-# AFIR-driven geometry optimisation for the Claisen rearrangement of
-# allyl vinyl ether → pent-4-enal  ([3,3] sigmatropic shift).
-#
-# 0-based atom index map
-# ──────────────────────
-#  idx  sym  role in Claisen 6-membered TS
-#   0    C   C2  vinyl carbon attached to O  (=CH–O)
-#   1    O   O3  ether oxygen
-#   2    C   C4  allyl methylene attached to O  (–CH₂–)   ← breaking bond (1–2)
-#   3    C   C5  allyl middle carbon  (=CH–)
-#   4    C   C6  allyl terminal carbon  (=CH₂)             ← forming bond (4–5)
-#   5    C   C1  vinyl terminal carbon  (=CH₂)             ← forming bond (4–5)
-#  6–13  H   hydrogens
-#
-# Claisen [3,3] key bonds
-# ───────────────────────
-#   forming : C1 (idx 5) ··· C6 (idx 4)   new C–C bond (reactant d ≈ 4.84 Å)
-#   breaking: O3 (idx 1) –– C4 (idx 2)   C–O bond cleaves (reactant d ≈ 1.43 Å)
-
-import numpy as np
-from ase import Atoms
-from ase.calculators.psi4 import Psi4
-from ase.io import write
-from ase.optimize import LBFGS
-
-from ase_biaspot import AFIRTerm, BiasCalculator
-
-# ── Build the allyl vinyl ether reactant from coordinates ────────────────────
-
-symbols = [
-    "C", "O", "C", "C", "C", "C",          # 0–5  heavy atoms
-    "H", "H", "H", "H", "H", "H", "H", "H",  # 6–13 hydrogens
-]
-positions = np.array([
-    [-0.03989051, -1.44876143, -4.10172098],  #  0: C2  vinyl (–O side)
-    [-0.24675417, -0.16352192, -4.69355444],  #  1: O3  ether oxygen
-    [ 0.99900999,  0.34386140, -5.17887270],  #  2: C4  allyl methylene (–O side)
-    [ 1.99215654,  0.47134851, -4.00882699],  #  3: C5  allyl middle
-    [ 3.32183313,  0.33200893, -4.23043860],  #  4: C6  allyl terminal  ← new bond
-    [-0.83456106, -1.86233332, -3.08485125],  #  5: C1  vinyl terminal  ← new bond
-    [ 0.74232880, -2.08390788, -4.46175144],  #  6: H
-    [-0.67977551, -2.82401638, -2.64201141],  #  7: H
-    [-1.61677881, -1.22718586, -2.72481917],  #  8: H
-    [ 1.39589792, -0.32674955, -5.91212635],  #  9: H
-    [ 0.84422389,  1.30554411, -5.62171311],  # 10: H
-    [ 1.63235197,  0.66994296, -3.02089940],  # 11: H
-    [ 3.68163775,  0.13341526, -5.21836632],  # 12: H
-    [ 4.01187671,  0.42059024, -3.41748521],  # 13: H
-])
-
-atoms = Atoms(symbols=symbols, positions=positions)
-
-# ── QM calculator: B3LYP/6-31G* via Psi4 ────────────────────────────────────
-
-qm_calc = Psi4(
-    atoms=atoms,
-    method="b3lyp",
-    basis="6-31g*",
-    memory="4GB",
-    num_threads=4,
-)
-
-# ── AFIR bias term ────────────────────────────────────────────────────────────
-#
-# group_a — allyl fragment   : C4, C5, C6  (indices 2, 3, 4)
-# group_b — vinyl ether part : C1, C2, O3  (indices 5, 0, 1)
-#
-# gamma = 150 kJ/mol pushes the two fragments together along the reaction
-# coordinate.  Increase to 200–250 kJ/mol if the system does not reach
-# the TS vicinity within 300 steps.
-
-afir_term = AFIRTerm(
-    name="claisen_afir",
-    group_a=[2, 3, 4],   # allyl fragment  (C4–CH₂, C5=CH–, C6=CH₂)
-    group_b=[0, 1, 5],   # vinyl ether fragment  (C2=CH–, O3, C1=CH₂)
-    gamma=150.0,          # kJ/mol — positive: push together
-    power=6.0,
-)
-
-biased = BiasCalculator(
-    base_calculator=qm_calc,
-    terms=[afir_term],
-    gradient_mode="auto",   # torch autograd if available, else FD
-    verbose=True,
-    csv_log_path="claisen_afir.csv",
-)
-atoms.calc = biased
-
-# ── Optimisation ──────────────────────────────────────────────────────────────
-
-opt = LBFGS(atoms, trajectory="claisen_afir.traj", logfile="claisen_afir.log")
-opt.run(fmax=0.05, steps=300)
-
-# ── Save AFIR-optimised structure (TS vicinity / approximate product) ─────────
-
-write("claisen_afir_product.xyz", atoms)
-print("AFIR optimisation complete.")
-```
-
-> **Tip — choosing gamma:**
-> Start with γ = 100 kJ/mol.  If the reaction does not occur within ~200 steps,
-> increase to 150–200 kJ/mol.  Very large values (> 400 kJ/mol) can distort bond
-> lengths significantly; use them only as a last resort.
-
-### Step 2 — Locate the transition state with NEB
-
-Convert the AFIR trajectory to a set of images and run a climbing-image NEB
-to locate the true TS between the reactant and the AFIR product.
-
-> **Converting trajectories:** To extract individual frames for NEB from an
-> ASE `.traj` file use:
-> ```bash
-> ase convert claisen_afir.traj claisen_afir.xyz
-> ```
 
 ### References
 

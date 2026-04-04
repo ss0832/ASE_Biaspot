@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.8] — 2026-04-04
+
+### Quality Assurance
+
+- **No new bugs found.** Full QA pass performed on the 0.1.7 codebase:
+  - `ruff check` and `ruff format` — all 19 files pass with no changes required.
+  - `mypy` — no issues found across all 8 source files (strict mode).
+  - `pytest` **with PyTorch** — 270 passed, 3 skipped (torch-only degenerate geometry warnings; expected).
+  - `pytest` **without PyTorch** — 89 passed, 48 skipped (all torch-dependent tests correctly skipped via `skipif`).
+
+---
+
 ## [0.1.7] — 2026-04-04
 
 ### Fixed

@@ -10,7 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- **Bug 3 — `afir_energy` / `afir_energy_tensor` / `_alpha_tensor`: near-zero
+- **Bug — `afir_energy` / `afir_energy_tensor` / `_alpha_tensor`: near-zero
   gamma guard widened and unified** (`afir.py`).
 
   The original guard (`< 1e-15`) was too narrow: empirical testing showed that

@@ -72,16 +72,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     explicit `_NNModuleBase.__init__(self)`, since `BiasTerm` no longer defines
     `__init__` and the MRO resolves directly to `nn.Module.__init__`.
 
-### Changed
-
-- **Ruff UP037 / F401 auto-fixes** (`core.py`, `tests/test_torch_terms.py`).
-
-  Nine auto-fixable linter errors resolved:
-
-  - UP037 × 8: quoted type annotations (``"torch.Tensor"``,
-    ``"float | nn.Parameter | None"``) removed from `core.py`.
-  - F401 × 1: unused ``import torch`` inside
-    `test_torch_callable_term_evaluate_no_param_grads` removed.
 
 ---
 

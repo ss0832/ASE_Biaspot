@@ -29,6 +29,7 @@ New term types can be registered from outside the library::
 
 from __future__ import annotations
 
+import ast
 import math
 import threading
 from collections.abc import Callable
@@ -157,6 +158,127 @@ _EXPR_SAFE_NS: dict[str, object] = {
 # Note: Python has no variable-level docstring syntax; this comment serves
 # as the documentation for _EXPR_SAFE_NS instead.
 
+# ── AST whitelist for expression_callable ─────────────────────────────────────
+
+_SAFE_AST_NODES: frozenset[type[ast.AST]] = frozenset(
+    {
+        # Expression root
+        ast.Expression,
+        # Arithmetic / logic operators
+        ast.BinOp,
+        ast.UnaryOp,
+        ast.BoolOp,
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.Div,
+        ast.FloorDiv,
+        ast.Mod,
+        ast.Pow,
+        ast.MatMult,
+        ast.UAdd,
+        ast.USub,
+        ast.Not,
+        ast.And,
+        ast.Or,
+        # Comparisons
+        ast.Compare,
+        ast.IfExp,
+        ast.Eq,
+        ast.NotEq,
+        ast.Lt,
+        ast.LtE,
+        ast.Gt,
+        ast.GtE,
+        # Literals and name references
+        ast.Constant,
+        ast.Name,
+        # Attribute access and calls (further restricted by walker rules below)
+        ast.Attribute,
+        ast.Call,
+        # Collection literals (comprehensions are deliberately excluded)
+        ast.Tuple,
+        ast.List,
+        ast.Dict,
+        ast.Load,
+        # keyword argument node used inside ast.Call
+        ast.keyword,
+    }
+)
+# Nodes blocked regardless of context.
+_BLOCKED_AST_TYPES: tuple[type[ast.AST], ...] = (
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+    ast.Lambda,
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    ast.Import,
+    ast.ImportFrom,
+    ast.Global,
+    ast.Nonlocal,
+)
+
+
+def _validate_expression_ast(expr: str) -> None:
+    """Inspect the AST of *expr* and reject dangerous nodes / patterns.
+
+    Called by :func:`_build_expression_fn` before ``compile()`` / ``eval()``
+    so that invalid expressions raise :exc:`ValueError` at build time (inside
+    :func:`term_from_spec`) rather than at evaluation time.
+
+    Checks applied
+    --------------
+    1. The expression must parse without a :exc:`SyntaxError`.
+    2. Nodes in :data:`_BLOCKED_AST_TYPES` are unconditionally rejected
+       (comprehensions, generators, lambda, class/function definitions,
+       imports, ``global`` / ``nonlocal``).
+    3. Nodes outside :data:`_SAFE_AST_NODES` are rejected.
+    4. ``ast.Attribute`` nodes whose ``value`` is not an ``ast.Name`` are
+       rejected — this blocks both ``().__class__`` (attribute on a
+       ``Constant``) and ``math.sqrt.__class__`` (chained attribute access).
+       Only single-level module attributes such as ``math.sqrt`` or ``np.pi``
+       are permitted.
+
+    Raises
+    ------
+    ValueError
+        When a :exc:`SyntaxError` is encountered or a forbidden construct is
+        detected.
+    """
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"expression_callable: invalid syntax in expression: {exc}") from exc
+
+    for node in ast.walk(tree):
+        # Rule 1 — explicit block list
+        if isinstance(node, _BLOCKED_AST_TYPES):
+            raise ValueError(
+                f"expression_callable: disallowed construct "
+                f"'{type(node).__name__}' in expression {expr!r}. "
+                "List/set/dict comprehensions, generators, lambda, and "
+                "function/class definitions are not permitted."
+            )
+        # Rule 2 — whitelist
+        if type(node) not in _SAFE_AST_NODES:
+            raise ValueError(
+                f"expression_callable: disallowed AST node "
+                f"'{type(node).__name__}' in expression {expr!r}."
+            )
+        # Rule 3 — attribute access must be a single-level module attribute
+        # (node.value must be ast.Name).  This blocks:
+        #   ().__class__          → Attribute(value=Constant(...))
+        #   math.sqrt.__class__   → Attribute(value=Attribute(...))
+        if isinstance(node, ast.Attribute) and not isinstance(node.value, ast.Name):
+            raise ValueError(
+                f"expression_callable: chained or non-name attribute access "
+                f"'.{node.attr}' is not permitted in {expr!r}. "
+                "Only top-level module attributes (e.g. math.sqrt, np.pi) are allowed."
+            )
+
 
 def _build_expression_fn(expr: str) -> Callable[[dict, dict], float]:
     """
@@ -223,6 +345,7 @@ def _build_expression_fn(expr: str) -> Callable[[dict, dict], float]:
                 "params": {"k": 1.0, "r0": 1.5},  # model parameters
             }
     """
+    _validate_expression_ast(expr)
     code = compile(expr, "<expression>", "eval")
 
     def _fn(vars_: dict, params: dict) -> float:
@@ -516,7 +639,14 @@ def term_from_spec(spec: dict[str, Any]) -> BiasTerm:
             f"Known types: {known}. "
             "Register custom types with @ase_biaspot.factory.register."
         )
-    return builder(spec["name"], spec)
+    name = spec.get("name")
+    if name is None:
+        raise KeyError(
+            "Term spec must contain a 'name' key. "
+            f"Got keys: {sorted(spec.keys())}. "
+            'Example: {"name": "my_term", "type": "afir", "params": {...}}'
+        )
+    return builder(name, spec)
 
 
 # ── Torch-based builders (require PyTorch) ────────────────────────────────────

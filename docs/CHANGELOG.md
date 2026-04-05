@@ -6,6 +6,121 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.12] — 2026-04-05
+
+### Security
+
+- **Issue 1 (🔴 critical) — Remote Code Execution via `expression_callable`**
+  (`factory.py`).
+
+  Setting `__builtins__ = {}` in the `eval()` globals is **not** a Python
+  sandbox.  By traversing `().__class__.__bases__[0].__subclasses__()` an
+  attacker could reach `subprocess.Popen` and execute arbitrary OS commands
+  through a crafted `"expression"` string.
+
+  **Fixed** by introducing `_validate_expression_ast()`, which parses the
+  expression with `ast.parse()` and walks the resulting AST **before**
+  `compile()` / `eval()` is called.  The validator enforces:
+
+  - An explicit block list (`_BLOCKED_AST_TYPES`) that rejects list/set/dict
+    comprehensions, generator expressions, `lambda`, function/class
+    definitions, `import` statements, and `global` / `nonlocal`.
+  - A whitelist (`_SAFE_AST_NODES`) that rejects any AST node type not
+    explicitly permitted.
+  - A per-node rule for `ast.Attribute`: the `value` must be an `ast.Name`
+    node, blocking both `().__class__` (attribute on a `Constant`) and
+    `math.sqrt.__class__` (chained attribute access).
+
+  Because `_validate_expression_ast()` is called inside `_build_expression_fn()`
+  at build time, invalid expressions raise `ValueError` immediately at
+  `term_from_spec()` / `BiasTerm` construction — before any atoms are touched
+  or any energy is computed.  Legitimate expressions (`k * (r - r0) ** 2`,
+  `math.sqrt(r)`, `np.exp(-r)`) pass validation unchanged.
+
+  **Affected file:** `src/ase_biaspot/factory.py`
+
+  **New tests:** `tests/test_0_1_12_fixes.py` —
+  `TestExpressionASTValidation` (10 cases covering both rejection and
+  acceptance).
+
+### Fixed
+
+- **Issue 3 (🟠 medium) — Unhelpful `KeyError` when `"name"` key is missing
+  from a term spec** (`factory.py`).
+
+  `term_from_spec()` raised a bare `KeyError: 'name'` with no context when
+  the spec dict did not contain a `"name"` key.  The `"type"` key already had
+  an informative error; `"name"` was overlooked.
+
+  **Fixed** by replacing `spec["name"]` with `spec.get("name")` followed by an
+  explicit check that raises `KeyError` with an actionable message showing the
+  keys that were present and an example of the correct structure.
+
+  **Affected file:** `src/ase_biaspot/factory.py`
+
+  **New tests:** `tests/test_0_1_12_fixes.py` —
+  `TestTermFromSpecMissingName` (5 cases including a regression check that the
+  `"type"` key error is unchanged).
+
+- **Issue 4 (🟡 low) — CQS violation in `_params_changed()` caused a hidden
+  cache-invalidation bug** (`calculator.py`).
+
+  `_params_changed()` combined a query ("has any parameter changed?") with a
+  command ("update the snapshot") in a single method.  This produced a subtle
+  bug: if `check_state()` was called twice in succession without an intervening
+  `calculate()`, the snapshot was updated on the first call, so the second call
+  found no change and returned `[]` — allowing ASE to serve a stale cache even
+  though the parameter had been modified.
+
+  **Fixed** by splitting the method into two responsibilities:
+
+  - `_params_changed()` is now a **pure predicate** (no side-effects).  It
+    compares current parameter values against the stored snapshot but never
+    writes to it.
+  - `_sync_param_snapshot()` is a new **command-only** method that advances
+    the snapshot.  It is called exclusively from the end of `calculate()`,
+    ensuring the baseline is updated only after a successful computation.
+
+  `check_state()` is unchanged — it still calls `_params_changed()`.  The
+  comment in `calculate()` that previously read
+  `self._params_changed()  # side-effect: updates _param_snapshot` has been
+  replaced with `self._sync_param_snapshot()`.
+
+  **Affected file:** `src/ase_biaspot/calculator.py`
+
+  **New tests:** `tests/test_0_1_12_fixes.py` —
+  `TestParamsChangedCQSSplit` (4 cases, PyTorch required) and
+  `TestParamsChangedNoTorch` (2 cases, no-PyTorch path).
+
+### Documentation
+
+- **Issue 2 (🟠 medium) — `BiasTerm.evaluate()` docstring did not document
+  the `atomic_numbers` precondition strengthened by subclasses** (`core.py`).
+
+  `BiasTerm.evaluate()` declared `atomic_numbers: list[int] | None = None`,
+  making `None` appear to be universally valid.  However, `AFIRTerm.evaluate()`
+  raises `ValueError` when `None` is passed — a silent LSP violation in the
+  documentation (the runtime behaviour was intentional and preserved).
+
+  **Fixed** by:
+
+  - Adding a **Notes** section to `BiasTerm.evaluate()` that explicitly lists
+    which subclasses strengthen the precondition (`AFIRTerm` requires it;
+    `CallableTerm` tolerates `None`; `TorchBiasTerm` subclasses follow their
+    `evaluate_tensor()` contract) and notes that `BiasCalculator` always
+    satisfies the precondition automatically.
+  - Improving `AFIRTerm.evaluate()`'s error message from
+    `"AFIRTerm.evaluate() requires atomic_numbers."` to a message that
+    includes `"(got None)"` and a concrete remediation hint.
+
+  **Affected file:** `src/ase_biaspot/core.py`
+
+  **New tests:** `tests/test_0_1_12_fixes.py` —
+  `TestAFIRTermEvaluateErrorMessage` (3 cases covering the error text and
+  that valid calls are unaffected).
+
+---
+
 ## [0.1.11] — 2026-04-05
 
 ### Fixed

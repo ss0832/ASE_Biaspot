@@ -136,7 +136,42 @@ class BiasTerm(metaclass=_BiasTermMeta):
         positions: np.ndarray,
         atomic_numbers: list[int] | None = None,
     ) -> float:
-        """Return bias energy (eV) for the given positions (Angstrom)."""
+        """Return bias energy (eV) for the given positions (Angstrom).
+
+        Parameters
+        ----------
+        positions : np.ndarray
+            Atomic positions, shape ``(N, 3)``, in Angstrom.
+        atomic_numbers : list[int] | None, optional
+            Atomic numbers for each atom.  Required by some subclasses; see
+            *Notes* below.
+
+        Returns
+        -------
+        float
+            Bias energy in eV.
+
+        Notes
+        -----
+        **Precondition strengthened by certain subclasses:**
+
+        Some subclasses require ``atomic_numbers`` to be provided and will
+        raise :exc:`ValueError` when it is ``None``.
+
+        - :class:`AFIRTerm` — covalent radii (element-dependent) are needed
+          for AFIR weight computation.  Passing ``None`` raises
+          :exc:`ValueError`.
+        - :class:`CallableTerm` — does not require ``atomic_numbers`` itself;
+          ``None`` is valid unless the user-supplied callable uses it.
+        - :class:`TorchBiasTerm` subclasses — follow the requirements of
+          their :meth:`evaluate_tensor` implementation.
+
+        :class:`BiasCalculator` always passes
+        ``atoms.get_atomic_numbers()`` so this precondition is
+        transparently satisfied in normal usage.  When calling
+        :meth:`evaluate` directly (e.g. in tests or custom training loops),
+        consult each subclass's documentation.
+        """
 
     @property
     def supports_autograd(self) -> bool:
@@ -302,7 +337,11 @@ class AFIRTerm(BiasTerm):
         atomic_numbers: list[int] | None = None,
     ) -> float:
         if atomic_numbers is None:
-            raise ValueError("AFIRTerm.evaluate() requires atomic_numbers.")
+            raise ValueError(
+                "AFIRTerm.evaluate() requires atomic_numbers (got None). "
+                "Pass atomic_numbers=list(atoms.get_atomic_numbers()) when "
+                "calling evaluate() directly. BiasCalculator handles this automatically."
+            )
         return afir_energy(
             positions, atomic_numbers, self.group_a, self.group_b, self.gamma, self.power
         )

@@ -214,16 +214,35 @@ class BiasCalculator(Calculator):
         return params
 
     def _params_changed(self) -> bool:
-        """Return True if any nn.Parameter value has changed since last call."""
-        changed = False
+        """Return True if any nn.Parameter value differs from the stored snapshot.
+
+        Pure predicate — no side-effects.  The snapshot is **not** updated
+        here; call :meth:`_sync_param_snapshot` (from :meth:`calculate`) to
+        establish the new baseline after a successful calculation.
+        """
+        if not _TORCH_AVAILABLE:
+            return False
         for p in self._collect_nn_params():
-            key = id(p)
             current = p.detach().cpu().clone()
-            prev = self._param_snapshot.get(key)
+            prev = self._param_snapshot.get(id(p))
             if prev is None or not torch.equal(prev, current):
-                self._param_snapshot[key] = current
-                changed = True
-        return changed
+                return True
+        return False
+
+    def _sync_param_snapshot(self) -> None:
+        """Update ``_param_snapshot`` to reflect the current parameter values.
+
+        Called at the end of :meth:`calculate` to set the baseline for the
+        next :meth:`check_state` call.  Separating this from
+        :meth:`_params_changed` (pure predicate) ensures that two consecutive
+        ``check_state()`` calls without an intervening ``calculate()`` both
+        report the change correctly — the snapshot is only advanced once
+        ``calculate()`` has actually run.
+        """
+        if not _TORCH_AVAILABLE:
+            return
+        for p in self._collect_nn_params():
+            self._param_snapshot[id(p)] = p.detach().cpu().clone()
 
     def check_state(self, atoms: Atoms, tol: float = 1e-15) -> list[str]:
         """Return a list of changed quantities that require recalculation.
@@ -344,7 +363,7 @@ class BiasCalculator(Calculator):
         # In that case _params_changed() has never been called and the snapshot
         # is empty.  We sync it here so the *next* check_state() call sees a
         # populated baseline and does not spuriously report "nn_params" changed.
-        self._params_changed()  # side-effect: updates _param_snapshot
+        self._sync_param_snapshot()
 
     # ── Bias computation (energy + gradient, single pass) ────────────────────
 

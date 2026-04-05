@@ -226,11 +226,23 @@ class TestTorchBiasTermBase:
     def test_supports_autograd(self):
         assert _harmonic_term().supports_autograd is True
 
-    def test_evaluate_raises_type_error(self):
+    def test_evaluate_returns_float_via_no_grad_path(self):
+        """evaluate() now provides a numpy path via evaluate_tensor() in no-grad mode.
+
+        This enables gradient_mode="fd" and removes the LSP violation where
+        the base class always raised but subclasses semantically could succeed.
+        """
         term = _harmonic_term()
         pos = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
-        with pytest.raises(TypeError, match=r"nn\.Parameter"):
-            term.evaluate(pos)
+        # Must not raise — returns a float via evaluate_tensor in no-grad mode
+        result = term.evaluate(pos)
+        assert isinstance(result, float)
+        # Value must match what evaluate_tensor() returns directly
+        import torch
+        with torch.no_grad():
+            p_t = torch.tensor(pos, dtype=torch.float64)
+            expected = float(term.evaluate_tensor(p_t).item())
+        assert abs(result - expected) < 1e-12
 
 
 # ── TorchCallableTerm ─────────────────────────────────────────────────────────
@@ -343,10 +355,12 @@ class TestTorchAFIRTerm:
     def test_power_is_float(self, term):
         assert isinstance(term.power, float)
 
-    def test_evaluate_raises(self, term):
-        pos = np.zeros((2, 3))
-        with pytest.raises(TypeError):
-            term.evaluate(pos, atomic_numbers=[1, 1])
+    def test_evaluate_returns_float_via_no_grad_path(self, term):
+        """evaluate() now works for TorchAFIRTerm via no-grad evaluate_tensor path."""
+        pos = np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+        result = term.evaluate(pos, atomic_numbers=[1, 1])
+        assert isinstance(result, float)
+        assert result > 0.0  # positive gamma → positive AFIR energy
 
     def test_evaluate_tensor_energy(self, term):
         pos = _pos_h2_tensor(r=2.0)
@@ -792,3 +806,142 @@ def test_torch_afir_gamma_min_abs_zero_suppresses():
             gamma_min_abs=0.0,
         )
     assert not any(issubclass(x.category, UserWarning) for x in w)
+
+
+# ── Regression tests: Bug 2 (LSP fix) & Bug 3 (gradient_mode="fd") ───────────
+
+
+class TestEvaluateNoGradPath:
+    """TorchBiasTerm.evaluate() now provides a numpy path via no-grad evaluate_tensor.
+
+    Regression tests for the LSP fix (Bug 2 in the architecture review):
+    evaluate() must return a finite float, not raise, for any concrete
+    TorchBiasTerm subclass.
+    """
+
+    def test_torch_callable_term_evaluate_returns_float(self):
+        """TorchCallableTerm.evaluate() must return a float, not raise."""
+        term = _harmonic_term(k_init=1.0, r0=0.9)
+        pos = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+        result = term.evaluate(pos)
+        assert isinstance(result, float)
+        assert np.isfinite(result)
+
+    def test_torch_callable_term_evaluate_matches_evaluate_tensor(self):
+        """evaluate() value must match evaluate_tensor() in no-grad mode."""
+        import torch
+
+        term = _harmonic_term(k_init=2.0, r0=0.5)
+        pos = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+        numpy_result = term.evaluate(pos)
+        with torch.no_grad():
+            p_t = torch.tensor(pos, dtype=torch.float64)
+            tensor_result = float(term.evaluate_tensor(p_t).item())
+        assert abs(numpy_result - tensor_result) < 1e-12
+
+    def test_torch_afir_term_evaluate_returns_float(self):
+        """TorchAFIRTerm.evaluate() must return a float, not raise."""
+        term = TorchAFIRTerm(name="afir", group_a=[0], group_b=[1], gamma_init=3.0)
+        pos = np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+        result = term.evaluate(pos, atomic_numbers=[1, 1])
+        assert isinstance(result, float)
+        assert np.isfinite(result)
+
+    def test_torch_callable_term_evaluate_no_param_grads(self):
+        """evaluate() must not populate nn.Parameter.grad (no-grad mode)."""
+        import torch
+
+        term = _harmonic_term(k_init=1.0)
+        pos = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+        term.zero_grad()
+        _ = term.evaluate(pos)
+        k_grad = term.trainable_params["k"].grad
+        assert k_grad is None, "evaluate() must not populate parameter gradients"
+
+
+class TestGradientModeFdForTorchTerms:
+    """gradient_mode='fd' must be honoured for TorchBiasTerm / TorchCallableTerm.
+
+    Regression tests for the routing bug (Bug 3 in the architecture review):
+    TorchBiasTerm instances were previously classified by isinstance(t, nn.Module)
+    before checking gradient_mode, causing gradient_mode='fd' to be silently
+    ignored and autograd to always be used.
+    """
+
+    def _make_calc(self, term, mode):
+        from ase.build import molecule
+        from ase.calculators.emt import EMT
+
+        from ase_biaspot.calculator import BiasCalculator
+
+        atoms = molecule("H2")
+        atoms.calc = BiasCalculator(
+            base_calculator=EMT(),
+            terms=[term],
+            gradient_mode=mode,
+        )
+        return atoms
+
+    def test_torch_callable_term_fd_forces_finite(self):
+        """gradient_mode='fd' must produce finite forces for TorchCallableTerm."""
+        term = _harmonic_term(k_init=1.0, r0=0.9)
+        atoms = self._make_calc(term, "fd")
+        forces = atoms.get_forces()
+        assert np.all(np.isfinite(forces)), "FD forces contain non-finite values"
+
+    def test_torch_callable_term_fd_vs_auto_forces_close(self):
+        """FD forces must agree closely with autograd forces for a smooth potential."""
+        from ase.build import molecule
+        from ase.calculators.emt import EMT
+
+        from ase_biaspot.calculator import BiasCalculator
+
+        atoms_auto = molecule("H2")
+        atoms_auto.calc = BiasCalculator(
+            EMT(), terms=[_harmonic_term(k_init=1.0, r0=0.9)], gradient_mode="auto"
+        )
+
+        atoms_fd = molecule("H2")
+        atoms_fd.calc = BiasCalculator(
+            EMT(), terms=[_harmonic_term(k_init=1.0, r0=0.9)], gradient_mode="fd"
+        )
+
+        f_auto = atoms_auto.get_forces()
+        f_fd = atoms_fd.get_forces()
+        # Central-difference FD with h=1e-6 gives ~1e-10 agreement for smooth potentials
+        np.testing.assert_allclose(f_fd, f_auto, atol=1e-6,
+                                   err_msg="FD and autograd forces must agree to 1e-6 eV/Å")
+
+    def test_torch_afir_term_fd_forces_finite(self):
+        """gradient_mode='fd' must produce finite forces for TorchAFIRTerm."""
+        from ase.build import molecule
+        from ase.calculators.emt import EMT
+
+        from ase_biaspot.calculator import BiasCalculator
+
+        atoms = molecule("H2")
+        term = TorchAFIRTerm(name="afir", group_a=[0], group_b=[1], gamma_init=3.0)
+        atoms.calc = BiasCalculator(
+            base_calculator=EMT(), terms=[term], gradient_mode="fd"
+        )
+        forces = atoms.get_forces()
+        assert np.all(np.isfinite(forces))
+
+    def test_torch_term_fd_does_not_populate_param_grads(self):
+        """gradient_mode='fd' must not populate nn.Parameter.grad."""
+        term = _harmonic_term(k_init=1.0, r0=0.9)
+        atoms = self._make_calc(term, "fd")
+        term.zero_grad()
+        atoms.get_forces()
+        k_grad = term.trainable_params["k"].grad
+        assert k_grad is None, (
+            "FD path must not populate parameter gradients; "
+            "that is the autograd path's responsibility"
+        )
+
+    def test_gradient_mode_fd_energy_only_torch_callable(self):
+        """Energy-only call with gradient_mode='fd' must succeed for TorchCallableTerm."""
+        term = _harmonic_term(k_init=1.0, r0=0.9)
+        atoms = self._make_calc(term, "fd")
+        energy = atoms.get_potential_energy()
+        assert np.isfinite(energy)

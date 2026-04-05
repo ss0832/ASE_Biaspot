@@ -6,6 +6,85 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.11] — 2026-04-05
+
+### Fixed
+
+- **Problem 1 (design debt) — runtime conditional class definition
+  (`_TORCH_AVAILABLE` branch)** (`core.py`).
+
+  `TorchBiasTerm`, `TorchCallableTerm`, and `TorchAFIRTerm` were defined
+  inside `if _TORCH_AVAILABLE: … else: …` blocks, causing three
+  `# type: ignore` suppressions and preventing static analysis tools from
+  resolving the class hierarchy.  Fixed by introducing `_NNModuleBase` as the
+  single conditional value; all three classes are now defined unconditionally
+  at module level.  All three `# type: ignore` suppressions have been removed
+  (combined with the Problem 5 fix below).
+
+- **Problem 2 (LSP violation) — `TorchBiasTerm.evaluate()` always raised
+  `NotImplementedError`** (`core.py`).
+
+  The parent class `BiasTerm.evaluate()` is abstract but intended to return a
+  float.  `TorchBiasTerm.evaluate()` unconditionally raised, making it
+  impossible to use `gradient_mode="fd"` with any `TorchBiasTerm` subclass.
+  Fixed: `evaluate()` now runs `evaluate_tensor()` inside `torch.no_grad()`
+  and returns `float(e.item())`, enabling the finite-difference gradient path.
+
+- **Problem 3 — `gradient_mode="fd"` silently ignored for `TorchBiasTerm`**
+  (`calculator.py`).
+
+  `_classify_terms()` previously checked `isinstance(t, nn.Module)` before
+  checking `gradient_mode`, routing `TorchBiasTerm` instances straight to
+  autograd regardless of the user's setting.  Fixed as part of Problem 4.
+
+- **Problem 4 — two competing routing criteria (`isinstance(nn.Module)` vs
+  `supports_autograd`)** (`calculator.py`).
+
+  `_classify_terms()` has been simplified to a single 2-bucket approach:
+  `supports_autograd` is now the **only** routing criterion.
+  `zero_module_grads` handling (the one remaining `isinstance(nn.Module)` use)
+  has been moved to `_autograd_energy_and_gradient()` where it belongs.
+
+- **Problem 5 (design debt) — `_wrap_init_for_name_check` complexity**
+  (`core.py`).
+
+  The previous mechanism for enforcing `self.name` assignment used three
+  interlocking pieces: a function that wrapped individual `__init__` methods
+  via `__init_subclass__`, an MRO-fallback check in `BiasTerm.__init__`, and
+  special-casing for `@dataclass` timing.  This left a `# type: ignore[misc]`
+  on the `cls.__init__ = …` assignment and depended on the order in which
+  Python fires `__init_subclass__` relative to `@dataclass`.
+
+  **Replaced** with a single :class:`_BiasTermMeta` metaclass (extends
+  :class:`~abc.ABCMeta`) whose :meth:`__call__` checks ``self.name`` after
+  ``__new__`` + ``__init__`` complete.  This is a uniform enforcement point
+  regardless of how the subclass defines its initialiser — no wrapping, no MRO
+  fallback, no `@dataclass` timing dependency.  LSP is preserved: the
+  precondition is unchanged, the postcondition is strengthened (returned
+  instances are guaranteed to have ``name``).
+
+  **Side-effects of this fix:**
+
+  - `functools` import removed (was only used by the wrapper).
+  - `BiasTerm.__init__` (MRO fallback) removed entirely.
+  - `__init_subclass__` reduced to a single `super()` delegation.
+  - `TorchBiasTerm.__init__` now calls `super().__init__()` instead of the
+    explicit `_NNModuleBase.__init__(self)`, since `BiasTerm` no longer defines
+    `__init__` and the MRO resolves directly to `nn.Module.__init__`.
+
+### Changed
+
+- **Ruff UP037 / F401 auto-fixes** (`core.py`, `tests/test_torch_terms.py`).
+
+  Nine auto-fixable linter errors resolved:
+
+  - UP037 × 8: quoted type annotations (``"torch.Tensor"``,
+    ``"float | nn.Parameter | None"``) removed from `core.py`.
+  - F401 × 1: unused ``import torch`` inside
+    `test_torch_callable_term_evaluate_no_param_grads` removed.
+
+---
+
 ## [0.1.10] — 2026-04-05
 
 ### Fixed

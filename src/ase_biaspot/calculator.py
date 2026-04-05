@@ -350,29 +350,41 @@ class BiasCalculator(Calculator):
 
     def _classify_terms(
         self,
-    ) -> tuple[list[BiasTerm], list[BiasTerm], list[BiasTerm]]:
-        """Classify terms into three gradient-strategy buckets.
+    ) -> tuple[list[BiasTerm], list[BiasTerm]]:
+        """Classify terms into two gradient-strategy buckets.
+
+        ``supports_autograd`` is the **single** routing criterion.
+        ``gradient_mode`` and PyTorch availability are applied uniformly to
+        every term that declares ``supports_autograd=True``, including
+        ``nn.Module``-based terms such as :class:`TorchBiasTerm`.
+
+        This removes the previous bug where ``gradient_mode="fd"`` was
+        silently ignored for ``TorchBiasTerm`` / ``TorchCallableTerm``
+        because ``isinstance(t, nn.Module)`` was checked before
+        ``gradient_mode``, routing those terms straight to autograd
+        regardless of the user's setting.
 
         Returns
         -------
-        torch_module_terms : list[BiasTerm]
-            Terms that are ``nn.Module`` instances (always torch autograd).
         autograd_terms : list[BiasTerm]
-            Terms with ``supports_autograd=True`` that are not nn.Module.
+            Terms routed to ``torch.autograd`` for this call.
+            Non-empty only when ``gradient_mode != "fd"`` **and**
+            ``_TORCH_AVAILABLE`` is ``True``.
         fd_only_terms : list[BiasTerm]
-            Terms with ``supports_autograd=False`` (always finite differences).
+            Terms routed to finite differences for this call.
+            Includes: terms with ``supports_autograd=False`` (always),
+            autograd-capable terms when ``gradient_mode="fd"``, and
+            autograd-capable terms when PyTorch is not installed.
         """
-        torch_module_terms: list[BiasTerm] = []
         autograd_terms: list[BiasTerm] = []
         fd_only_terms: list[BiasTerm] = []
+        use_autograd_globally = _TORCH_AVAILABLE and self.gradient_mode != "fd"
         for t in self.terms:
-            if _TORCH_AVAILABLE and isinstance(t, nn.Module):
-                torch_module_terms.append(t)
-            elif t.supports_autograd:
+            if t.supports_autograd and use_autograd_globally:
                 autograd_terms.append(t)
             else:
                 fd_only_terms.append(t)
-        return torch_module_terms, autograd_terms, fd_only_terms
+        return autograd_terms, fd_only_terms
 
     def _compute_bias(
         self,
@@ -411,16 +423,16 @@ class BiasCalculator(Calculator):
         per_term: dict[str, float] = {}
         grad = np.zeros_like(positions, dtype=float)
 
-        torch_module_terms, autograd_terms, fd_only_terms = self._classify_terms()
+        autograd_terms, fd_only_terms = self._classify_terms()
 
         # ── Energy-only fast path (skip all gradient computation) ────────────
         if not need_forces:
-            if _TORCH_AVAILABLE and (torch_module_terms or autograd_terms):
+            if _TORCH_AVAILABLE and autograd_terms:
                 import torch as _torch
 
                 p_t = _torch.tensor(positions, dtype=_torch.float64)
                 with _torch.no_grad():
-                    for t in torch_module_terms + autograd_terms:
+                    for t in autograd_terms:
                         e = t.evaluate_tensor(p_t, atomic_numbers)
                         if e.shape != ():
                             raise TypeError(
@@ -430,7 +442,7 @@ class BiasCalculator(Calculator):
                             )
                         per_term[t.name] = float(e.item())
             else:
-                # torch unavailable — fall back to evaluate() for autograd_terms too
+                # torch unavailable or gradient_mode="fd" — use evaluate()
                 for t in autograd_terms:
                     per_term[t.name] = float(t.evaluate(positions, atomic_numbers))
             for t in fd_only_terms:
@@ -438,37 +450,30 @@ class BiasCalculator(Calculator):
             per_term = {t.name: per_term[t.name] for t in self.terms}
             return per_term, grad
 
-        # ── TorchBiasTerm: always autograd ───────────────────────────────────
-        if torch_module_terms:
-            if not _TORCH_AVAILABLE:  # pragma: no cover
-                raise ImportError("TorchBiasTerm requires PyTorch. Install with: pip install torch")
+        # ── Autograd-capable terms (TorchBiasTerm, AFIRTerm, etc.) ──────────
+        if autograd_terms:
+            # zero_module_grads applies to any nn.Module in this bucket
+            # (TorchBiasTerm instances); _autograd_energy_and_gradient
+            # checks isinstance internally.
             term_energies, term_grad = self._autograd_energy_and_gradient(
                 positions,
                 atomic_numbers,
-                torch_module_terms,
+                autograd_terms,
                 zero_module_grads=self.zero_param_grads,
             )
             per_term.update(term_energies)
             grad += term_grad
 
-        # ── Autograd-capable terms (AFIRTerm etc.) ───────────────────────────
-        if autograd_terms:
-            use_torch = _TORCH_AVAILABLE and self.gradient_mode != "fd"
-            if use_torch:
-                term_energies, term_grad = self._autograd_energy_and_gradient(
-                    positions, atomic_numbers, autograd_terms
-                )
-                per_term.update(term_energies)
-                grad += term_grad
-            else:
-                if self.gradient_mode != "fd":
-                    self._warn_fd_fallback()
-                for t in autograd_terms:
-                    per_term[t.name] = float(t.evaluate(positions, atomic_numbers))
-                grad += self._fd_gradient(positions, atomic_numbers, autograd_terms)
-
-        # ── FD-only terms (CallableTerm etc.) ────────────────────────────────
+        # ── FD-only terms (CallableTerm, and all terms when mode="fd") ───────
         if fd_only_terms:
+            if not self._warned_fd:
+                # Warn if any fd_only term originally supported autograd —
+                # that means we're falling back due to torch being absent.
+                fd_autograd_capable = [
+                    t for t in fd_only_terms if t.supports_autograd
+                ]
+                if fd_autograd_capable and not _TORCH_AVAILABLE:
+                    self._warn_fd_fallback()
             for t in fd_only_terms:
                 per_term[t.name] = float(t.evaluate(positions, atomic_numbers))
             grad += self._fd_gradient(positions, atomic_numbers, fd_only_terms)

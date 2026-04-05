@@ -51,12 +51,15 @@ BiasCallable: TypeAlias = Callable[[dict[str, Any], dict[str, Any]], float]
 
 
 def _wrap_init_for_name_check(cls: type) -> None:
-    """Wrap *cls*'s own ``__init__`` to verify ``self.name`` is set.
+    """Wrap *cls*'s own ``__init__`` to verify ``self.name`` is set after it returns.
 
     ``orig`` is taken from ``cls.__dict__`` so we always wrap the method
-    defined on *cls*, not an inherited one.  A ``_biaspot_name_checked``
-    marker is set on the wrapper so that :meth:`BiasTerm.__init__` can
-    detect it and skip its own duplicate check (see Bug 1 fix).
+    defined on *cls*, not an inherited one.
+
+    The wrapper does **not** set a ``_biaspot_name_checked`` marker; instead,
+    :meth:`BiasTerm.__init__` detects the presence of any ``__init__`` in
+    ``type(self).__dict__`` and skips its own check accordingly (see that
+    method's docstring for the reasoning).
     """
     orig = cls.__dict__["__init__"]
 
@@ -70,9 +73,6 @@ def _wrap_init_for_name_check(cls: type) -> None:
                 "self.name inside its __init__()."
             )
 
-    # Marker consumed by BiasTerm.__init__ to suppress the duplicate check
-    # when a wrapped __init__ is already in the MRO for the concrete class.
-    _checked_init._biaspot_name_checked = True  # type: ignore[attr-defined]
     cls.__init__ = _checked_init  # type: ignore[misc]
 
 
@@ -155,35 +155,35 @@ class BiasTerm(ABC):
         """
         MRO fallback that enforces ``self.name`` for no-``__init__`` subclasses.
 
-        **Why this exists (Bug 1 fix):**
+        **Why this exists:**
         ``__init_subclass__`` can only wrap ``__init__`` methods that are
-        *explicitly defined* on the subclass.  When a concrete subclass omits
-        ``__init__`` entirely, Python resolves to this method through the MRO.
-        We use that as the check point.
+        *explicitly defined* on the subclass at class-definition time.  When a
+        concrete subclass omits ``__init__`` entirely, Python resolves to this
+        method through the MRO; we use that as the check point.
 
-        **How the false-positive guard works:**
-        For subclasses that DO have a (wrapped) ``__init__`` and happen to call
-        ``super().__init__()``, the wrapper already has ``_biaspot_name_checked``
-        set to ``True`` in ``cls.__dict__``.  We detect that marker and skip the
-        check here, preventing a spurious :exc:`TypeError` being raised before
-        the wrapped ``__init__`` has had a chance to set ``self.name``.
+        **False-positive guard — no marker needed:**
+        If the concrete class has *any* ``__init__`` in its own ``__dict__``
+        (either our wrapper or a ``@dataclass``-generated one), we skip the
+        check here:
 
-        **Dataclass interaction:**
-        ``@dataclass``-generated ``__init__`` methods do **not** call
-        ``super().__init__()`` by default, so this method is never reached for
-        dataclass instances.  Even if it were reached (e.g. via an explicit
-        ``super().__init__()`` call in ``__post_init__``), the guard would fire
-        only if ``self.name`` had not already been set, which is impossible for
-        a well-formed dataclass that declares ``name: str``.
+        * **Wrapped ``__init__``**: the wrapper runs ``orig()`` first, then
+          checks ``self.name`` itself.  If ``super().__init__()`` is called
+          inside ``orig()`` before ``self.name`` is assigned, this method fires
+          but sees the wrapper in ``type(self).__dict__["__init__"]`` and
+          returns immediately — avoiding a premature :exc:`TypeError`.
+        * **``@dataclass``-generated ``__init__``**: ``name: str`` is a
+          required field so it is always set.  Dataclass ``__init__`` does not
+          call ``super().__init__()`` by default, so this branch is never
+          reached; the ``"__init__" in …`` guard is a belt-and-suspenders
+          safety net for the rare case of an explicit ``super().__init__()``
+          call in ``__post_init__``.
+
+        Previously this guard relied on a ``_biaspot_name_checked`` attribute
+        set on the wrapper function.  The simpler ``"__init__" in
+        type(self).__dict__`` check is equivalent and removes the need for
+        that out-of-band marker entirely.
         """
-        # Check the *immediate* class's __dict__ for a wrapped __init__.
-        # If one exists and carries _biaspot_name_checked, the concrete class
-        # has a custom __init__ that will handle the check itself.  Skip here
-        # to avoid a premature TypeError when super().__init__() is called
-        # before self.name is assigned.
-        own_init_fn = type(self).__dict__.get("__init__")
-        already_guarded = getattr(own_init_fn, "_biaspot_name_checked", False)
-        if not already_guarded:
+        if "__init__" not in type(self).__dict__:
             if not hasattr(self, "name"):
                 raise TypeError(
                     f"{type(self).__name__}.__init__() did not set self.name. "
@@ -548,391 +548,420 @@ class CallableTerm(BiasTerm):
         return _coerce_to_float(raw, self.name)
 
 
+
 # ── nn.Module-based terms (require PyTorch) ──────────────────────────────────
+#
+# Design note (Problem 1 fix):
+# Previously, TorchBiasTerm / TorchCallableTerm / TorchAFIRTerm were defined
+# inside `if _TORCH_AVAILABLE:` with stub aliases in the `else` branch.  That
+# caused:
+#   • Three `# type: ignore` suppressions (no-redef, misc, assignment).
+#   • mypy / IDEs unable to determine which branch is active statically.
+#   • `TorchCallableTerm` and `TorchAFIRTerm` silently becoming the same class
+#     as `TorchBiasTerm` at runtime when torch is absent.
+#
+# The fix: introduce `_NNModuleBase` as the single conditional, then define all
+# three classes at module level with a single unconditional class hierarchy.
+# `require_torch()` in `TorchBiasTerm.__init__` raises ImportError before any
+# torch-specific code runs, so the `_NNModuleBase = object` fallback is never
+# observable from user code.  The `# type: ignore[assignment]` on that line is
+# the only remaining suppression (down from three).
 
 if _TORCH_AVAILABLE:
     import torch
     import torch.nn as nn
+    _NNModuleBase: type = nn.Module
+else:
+    _NNModuleBase = object  # type: ignore[assignment]
 
-    def _to_parameter(v: Any) -> nn.Parameter:
-        """Convert a scalar / Tensor to an nn.Parameter (float64)."""
-        if isinstance(v, nn.Parameter):
-            return v
-        if isinstance(v, torch.Tensor):
-            return nn.Parameter(v.clone().detach().to(torch.float64))
-        return nn.Parameter(torch.tensor(float(v), dtype=torch.float64))
 
-    class TorchBiasTerm(BiasTerm, nn.Module):
+def _to_parameter(v: Any) -> Any:
+    """Convert a scalar / Tensor to an nn.Parameter (float64).
+
+    Requires PyTorch.  Only ever called from ``TorchCallableTerm.__init__``,
+    which is guarded by ``require_torch()`` via ``TorchBiasTerm.__init__``.
+    """
+    # Local import so this helper can live at module level without triggering
+    # an ImportError on environments without torch.  When torch is available
+    # the import is a no-op (already cached in sys.modules).
+    import torch as _torch
+    import torch.nn as _nn
+    if isinstance(v, _nn.Parameter):
+        return v
+    if isinstance(v, _torch.Tensor):
+        return _nn.Parameter(v.clone().detach().to(_torch.float64))
+    return _nn.Parameter(_torch.tensor(float(v), dtype=_torch.float64))
+
+
+class TorchBiasTerm(BiasTerm, _NNModuleBase):  # type: ignore[misc]
+    """
+    Abstract base class for bias terms with learnable (nn.Parameter) weights.
+
+    Extends both :class:`BiasTerm` and ``torch.nn.Module`` so that
+    learnable parameters are managed by the standard PyTorch ecosystem
+    (``Adam``, ``LBFGS``, ``term.parameters()``, ``term.zero_grad()``, …).
+
+    Subclassing contract
+    --------------------
+    * Implement ``evaluate_tensor(positions, atomic_numbers)``.
+    * ``evaluate()`` is available for finite-difference gradient computation
+      (``gradient_mode="fd"``); it runs ``evaluate_tensor()`` in a
+      ``torch.no_grad()`` context.  ``nn.Parameter`` gradients are **not**
+      populated through this path.
+
+    Usage example — learnable harmonic distance term::
+
+        class HarmonicTorchTerm(TorchBiasTerm):
+            def __init__(self, name, i, j, k_init, r0):
+                super().__init__(name)
+                self.i, self.j, self.r0 = i, j, r0
+                self.k = nn.Parameter(torch.tensor(k_init, dtype=torch.float64))
+
+            def evaluate_tensor(self, positions, atomic_numbers=None):
+                r = torch.linalg.norm(positions[self.i] - positions[self.j])
+                return self.k * (r - self.r0) ** 2
+
+    Notes
+    -----
+    * :class:`BiasCalculator` always uses ``evaluate_tensor`` (torch autograd)
+      for energy **and** forces when the term is a :class:`TorchBiasTerm`
+      under ``gradient_mode="auto"`` (the default).
+    * Parameter gradients (``nn.Parameter.grad``) are populated by
+      ``BiasCalculator`` after each force call.  Call ``term.zero_grad()``
+      before accumulating gradients for an external optimizer step.
+    * Instantiating this class (or any subclass) when PyTorch is not installed
+      raises :exc:`ImportError` via :func:`require_torch`.
+    """
+
+    def __init__(self, name: str) -> None:
+        require_torch("TorchBiasTerm")
+        # Explicit call to _NNModuleBase.__init__ (= nn.Module.__init__ when
+        # torch is available) so that the Module registry is properly set up.
+        # Using the base name rather than super() avoids MRO ambiguity with
+        # BiasTerm.__init__ (which checks self.name before it is assigned).
+        _NNModuleBase.__init__(self)
+        self.name = name
+
+    @property
+    def supports_autograd(self) -> bool:
+        return True
+
+    def evaluate(
+        self,
+        positions: np.ndarray,
+        atomic_numbers: list[int] | None = None,
+    ) -> float:
+        """Return bias energy (eV) using evaluate_tensor() in no-grad mode.
+
+        This provides a NumPy-compatible path that makes finite-difference
+        gradient computation possible (``gradient_mode="fd"``).
+
+        .. note::
+           ``nn.Parameter`` gradients are **not** populated through this
+           path (``torch.no_grad()`` suppresses the autograd graph).
+           Use ``evaluate_tensor()`` directly, or let
+           :class:`BiasCalculator` handle it with autograd, when you
+           need parameter gradients for an external optimiser step.
         """
-        Abstract base class for bias terms with learnable (nn.Parameter) weights.
+        import torch as _torch
+        with _torch.no_grad():
+            p_t = _torch.tensor(positions, dtype=_torch.float64)
+            e = self.evaluate_tensor(p_t, atomic_numbers)
+        return float(e.item())
 
-        Extends both :class:`BiasTerm` and ``torch.nn.Module`` so that
-        learnable parameters are managed by the standard PyTorch ecosystem
-        (``Adam``, ``LBFGS``, ``term.parameters()``, ``term.zero_grad()``, …).
+    def evaluate_tensor(
+        self,
+        positions: "torch.Tensor",
+        atomic_numbers: list[int] | None = None,
+    ) -> "torch.Tensor":
+        raise NotImplementedError(f"{type(self).__name__} must implement evaluate_tensor().")
 
-        Subclassing contract
-        --------------------
-        * Implement ``evaluate_tensor(positions, atomic_numbers)``.
-        * **Do not** call ``evaluate()``: it always raises :exc:`TypeError`
-          because FD cannot differentiate through nn.Parameters.
 
-        Usage example — learnable harmonic distance term::
+class TorchCallableTerm(TorchBiasTerm):
+    """
+    Bias term with a torch-native callable and learnable weights.
 
-            class HarmonicTorchTerm(TorchBiasTerm):
-                def __init__(self, name, i, j, k_init, r0):
-                    super().__init__(name)
-                    self.i, self.j, self.r0 = i, j, r0
-                    self.k = nn.Parameter(torch.tensor(k_init, dtype=torch.float64))
+    Three kinds of parameters can be passed to *fn* via the ``params`` dict:
 
-                def evaluate_tensor(self, positions, atomic_numbers=None):
-                    r = torch.linalg.norm(positions[self.i] - positions[self.j])
-                    return self.k * (r - self.r0) ** 2
+    * **fixed_params** — plain Python constants (floats, ints, ...).
+    * **trainable_params** — scalar/tensor values stored as ``nn.Parameter``
+      (float64).  Gradients w.r.t. these are populated by
+      :class:`BiasCalculator` after each step.
+    * **submodules** — arbitrary ``nn.Module`` objects (MLP, SchNet layer, ...).
+      Their full parameter trees are registered under ``self.submodules``
+      (``nn.ModuleDict``) so that ``term.parameters()`` yields every weight
+      and ``term.zero_grad()`` resets every gradient.
 
-        Notes
-        -----
-        * :class:`BiasCalculator` always uses ``evaluate_tensor`` (torch autograd)
-          for energy **and** forces when the term is a :class:`TorchBiasTerm`.
-        * Parameter gradients (``nn.Parameter.grad``) are populated by
-          ``BiasCalculator`` after each force call.  Call ``term.zero_grad()``
-          before accumulating gradients for an external optimizer step.
-        """
+    All three are merged into a single ``params`` dict before *fn* is called,
+    so *fn* always has the signature
+    ``(vars_: dict[str, Tensor], params: dict[str, Any]) -> Tensor``.
+    This keeps the interface backward-compatible: existing two-argument
+    callables continue to work unchanged.
 
-        def __init__(self, name: str) -> None:
-            nn.Module.__init__(self)
-            self.name = name
+    Parameters
+    ----------
+    name : str
+        Identifier used in log output.
+    fn : callable
+        ``(vars_: dict[str, Tensor], params: dict[str, Any]) -> Tensor``
+        Must use torch operations so that autograd can propagate through it.
+    variables : dict[str, VariableFunction]
+        Geometry extractors.  The same lambdas used with :class:`CallableTerm`
+        work here -- they receive a :class:`TorchGeometryContext` and return
+        ``torch.Tensor`` scalars automatically.
+    fixed_params : dict[str, Any]
+        Non-learnable constants forwarded to *fn*.
+    trainable_params : dict[str, float | Tensor | nn.Parameter]
+        Learnable scalar/tensor weights.  Values are converted to
+        ``nn.Parameter`` (float64) automatically.
+    submodules : dict[str, nn.Module]
+        Arbitrary ``nn.Module`` objects (e.g. MLP, embedding).  Registered
+        via ``nn.ModuleDict`` so their parameters are tracked by PyTorch.
+        Accessed in *fn* as ``params["module_key"]``.
 
-        @property
-        def supports_autograd(self) -> bool:
-            return True
+    Examples
+    --------
+    Scalar learnable parameter::
 
-        def evaluate(
-            self,
-            positions: np.ndarray,
-            atomic_numbers: list[int] | None = None,
-        ) -> float:
-            raise TypeError(
-                f"{type(self).__name__} has learnable nn.Parameters. "
-                "Calling evaluate() (NumPy / finite-difference path) is disabled "
-                "because detaching the parameters would silently drop gradients. "
-                "Use evaluate_tensor() directly, or let BiasCalculator handle it."
-            )
+        import torch.nn as nn
+        from ase_biaspot import TorchCallableTerm
 
-        def evaluate_tensor(
-            self,
-            positions: torch.Tensor,
-            atomic_numbers: list[int] | None = None,
-        ) -> torch.Tensor:
-            raise NotImplementedError(f"{type(self).__name__} must implement evaluate_tensor().")
+        k = nn.Parameter(torch.tensor(1.0, dtype=torch.float64))
+        term = TorchCallableTerm(
+            name="harmonic_r",
+            fn=lambda v, p: p["k"] * (v["r"] - p["r0"]) ** 2,
+            variables={"r": lambda ctx: ctx.distance(0, 1)},
+            fixed_params={"r0": 0.9},
+            trainable_params={"k": k},
+        )
 
-    class TorchCallableTerm(TorchBiasTerm):
-        """
-        Bias term with a torch-native callable and learnable weights.
+    MLP bias via ``submodules``::
 
-        Three kinds of parameters can be passed to *fn* via the ``params`` dict:
+        import torch
+        import torch.nn as nn
+        from ase_biaspot import TorchCallableTerm
 
-        * **fixed_params** — plain Python constants (floats, ints, ...).
-        * **trainable_params** — scalar/tensor values stored as ``nn.Parameter``
-          (float64).  Gradients w.r.t. these are populated by
-          :class:`BiasCalculator` after each step.
-        * **submodules** — arbitrary ``nn.Module`` objects (MLP, SchNet layer, ...).
-          Their full parameter trees are registered under ``self.submodules``
-          (``nn.ModuleDict``) so that ``term.parameters()`` yields every weight
-          and ``term.zero_grad()`` resets every gradient.
+        mlp = nn.Sequential(
+            nn.Linear(1, 16, dtype=torch.float64),
+            nn.Tanh(),
+            nn.Linear(16, 1, dtype=torch.float64),
+        )
+        term = TorchCallableTerm(
+            name="mlp_distance_bias",
+            fn=lambda v, p: p["mlp"](v["r"].unsqueeze(0)).squeeze(),
+            variables={"r": lambda ctx: ctx.distance(0, 1)},
+            submodules={"mlp": mlp},
+        )
+        # All MLP weights are visible to an external optimizer:
+        opt = torch.optim.Adam(term.parameters(), lr=1e-3)
+    """
 
-        All three are merged into a single ``params`` dict before *fn* is called,
-        so *fn* always has the signature
-        ``(vars_: dict[str, Tensor], params: dict[str, Any]) -> Tensor``.
-        This keeps the interface backward-compatible: existing two-argument
-        callables continue to work unchanged.
+    def __init__(
+        self,
+        name: str,
+        fn: Any,
+        variables: dict[str, Any] | None = None,
+        fixed_params: dict[str, Any] | None = None,
+        trainable_params: dict[str, Any] | None = None,
+        submodules: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(name)
+        self.fn = fn
+        self.variables: dict[str, Any] = variables or {}
+        self.fixed_params: dict[str, Any] = fixed_params or {}
+        import torch.nn as _nn
+        self.trainable_params = _nn.ParameterDict(
+            {k: _to_parameter(v) for k, v in (trainable_params or {}).items()}
+        )
+        # nn.ModuleDict registers sub-modules so their parameters are
+        # tracked by PyTorch (term.parameters(), term.zero_grad(), etc.)
+        self.submodules = _nn.ModuleDict(submodules or {})
 
-        Parameters
-        ----------
-        name : str
-            Identifier used in log output.
-        fn : callable
-            ``(vars_: dict[str, Tensor], params: dict[str, Any]) -> Tensor``
-            Must use torch operations so that autograd can propagate through it.
-        variables : dict[str, VariableFunction]
-            Geometry extractors.  The same lambdas used with :class:`CallableTerm`
-            work here -- they receive a :class:`TorchGeometryContext` and return
-            ``torch.Tensor`` scalars automatically.
-        fixed_params : dict[str, Any]
-            Non-learnable constants forwarded to *fn*.
-        trainable_params : dict[str, float | Tensor | nn.Parameter]
-            Learnable scalar/tensor weights.  Values are converted to
-            ``nn.Parameter`` (float64) automatically.
-        submodules : dict[str, nn.Module]
-            Arbitrary ``nn.Module`` objects (e.g. MLP, embedding).  Registered
-            via ``nn.ModuleDict`` so their parameters are tracked by PyTorch.
-            Accessed in *fn* as ``params["module_key"]``.
-
-        Examples
-        --------
-        Scalar learnable parameter::
-
-            import torch.nn as nn
-            from ase_biaspot import TorchCallableTerm
-
-            k = nn.Parameter(torch.tensor(1.0, dtype=torch.float64))
-            term = TorchCallableTerm(
-                name="harmonic_r",
-                fn=lambda v, p: p["k"] * (v["r"] - p["r0"]) ** 2,
-                variables={"r": lambda ctx: ctx.distance(0, 1)},
-                fixed_params={"r0": 0.9},
-                trainable_params={"k": k},
-            )
-
-        MLP bias via ``submodules``::
-
-            import torch
-            import torch.nn as nn
-            from ase_biaspot import TorchCallableTerm
-
-            mlp = nn.Sequential(
-                nn.Linear(1, 16, dtype=torch.float64),
-                nn.Tanh(),
-                nn.Linear(16, 1, dtype=torch.float64),
-            )
-            term = TorchCallableTerm(
-                name="mlp_distance_bias",
-                fn=lambda v, p: p["mlp"](v["r"].unsqueeze(0)).squeeze(),
-                variables={"r": lambda ctx: ctx.distance(0, 1)},
-                submodules={"mlp": mlp},
-            )
-            # All MLP weights are visible to an external optimizer:
-            opt = torch.optim.Adam(term.parameters(), lr=1e-3)
-        """
-
-        def __init__(
-            self,
-            name: str,
-            fn: Any,
-            variables: dict[str, Any] | None = None,
-            fixed_params: dict[str, Any] | None = None,
-            trainable_params: dict[str, Any] | None = None,
-            submodules: dict[str, nn.Module] | None = None,
-        ) -> None:
-            super().__init__(name)
-            self.fn = fn
-            self.variables: dict[str, Any] = variables or {}
-            self.fixed_params: dict[str, Any] = fixed_params or {}
-            self.trainable_params = nn.ParameterDict(
-                {k: _to_parameter(v) for k, v in (trainable_params or {}).items()}
-            )
-            # nn.ModuleDict registers sub-modules so their parameters are
-            # tracked by PyTorch (term.parameters(), term.zero_grad(), etc.)
-            self.submodules = nn.ModuleDict(submodules or {})
-
-        def evaluate_tensor(
-            self,
-            positions: torch.Tensor,
-            atomic_numbers: list[int] | None = None,
-        ) -> torch.Tensor:
-            ctx = TorchGeometryContext(positions=positions, atomic_numbers=atomic_numbers)
-            vars_: dict[str, Any] = {
-                key: extractor(ctx) for key, extractor in self.variables.items()
-            }
-            # Merge all param sources; submodules are passed as nn.Module objects
-            # so fn can call them directly (e.g. p["mlp"](x)).
-            #
-            # Collision detection: warn when a key defined in an earlier source
-            # is silently overwritten by a later one.  Precedence order is
-            # fixed_params → trainable_params → submodules, mirroring the update
-            # sequence below.  We surface every collision so the user can rename
-            # conflicting keys before a trainable parameter gets hidden by a
-            # constant (the most dangerous silent failure mode).
-            params: dict[str, Any] = dict(self.fixed_params)
-            for source_name, source in (
-                ("trainable_params", dict(self.trainable_params)),
-                ("submodules", dict(self.submodules)),
-            ):
-                collisions = set(params.keys()) & set(source.keys())
-                if collisions:
-                    warnings.warn(
-                        f"TorchCallableTerm '{self.name}': parameter key(s) "
-                        f"{sorted(collisions)} defined in an earlier source are "
-                        f"overwritten by '{source_name}'. Rename the conflicting "
-                        "keys to avoid silent parameter shadowing.",
-                        UserWarning,
-                        stacklevel=2,
-                    )
-                params.update(source)
-            return self.fn(vars_, params)
-
-    class TorchAFIRTerm(TorchBiasTerm):
-        """
-        AFIR bias term with a learnable ``gamma`` parameter (``nn.Parameter``).
-
-        ``power`` remains a fixed float because it appears only as an integer-like
-        exponent and its gradient is rarely meaningful in practice.
-
-        Parameters
-        ----------
-        name : str
-            Identifier used in log output.
-        group_a, group_b : list[int]
-            0-based atom indices for fragments A and B (non-overlapping).
-        gamma_init : float or nn.Parameter
-            Initial value of the AFIR gamma parameter (kJ/mol).
-            Stored as ``self.gamma_param`` (``nn.Parameter``, float64).
-
-            Accepts either a plain ``float`` (a fresh ``nn.Parameter`` is
-            created internally) **or** an existing ``nn.Parameter`` (used
-            directly without copying, so ``term.parameters()`` yields the
-            same object the caller holds).  Passing an ``nn.Parameter`` is
-            the recommended pattern when you need to monitor or update
-            ``gamma`` from outside ``BiasCalculator``::
-
-                gamma = nn.Parameter(torch.tensor(3.0, dtype=torch.float64))
-                term  = TorchAFIRTerm(..., gamma_init=gamma)
-                # term.gamma_param is gamma — same object, not a copy.
-                opt = torch.optim.Adam(term.parameters(), lr=0.1)
-                # opt now updates the same tensor the caller holds.
-
-            .. warning::
-               Initializing with ``gamma_init=0`` (or very close to zero) is
-               discouraged. The gradient ``∂alpha/∂gamma`` diverges near zero
-               due to the smooth approximation used in ``_alpha_tensor``, which
-               can cause optimizer instability at the first step.
-               A ``UserWarning`` is emitted when ``|gamma_init| < 0.1`` kJ/mol.
-
-        power : float
-            Exponent in the ω weight function (default: 6, fixed).
-        gamma_min_abs : float, optional
-            Threshold below which a ``UserWarning`` is emitted (default: 0.1 kJ/mol).
-            Set to 0.0 to suppress the warning.
-
-        Examples
-        --------
-        .. rubric:: Float initialisation (most common)
-
-        ::
-
-            import torch
-            from ase_biaspot import TorchAFIRTerm
-
-            term = TorchAFIRTerm(
-                name="afir_learnable",
-                group_a=[0, 1],
-                group_b=[2, 3],
-                gamma_init=2.5,
-            )
-            # After a BiasCalculator step:
-            print(term.gamma_param.grad)   # ∂E_AFIR / ∂gamma
-
-            opt = torch.optim.Adam(term.parameters(), lr=0.1)
-            opt.step(); opt.zero_grad()
-
-        .. rubric:: ``nn.Parameter`` passthrough (external monitoring)
-
-        ::
-
-            import torch, torch.nn as nn
-            from ase_biaspot import TorchAFIRTerm
-
-            gamma = nn.Parameter(torch.tensor(3.0, dtype=torch.float64))
-            term  = TorchAFIRTerm(name="afir", group_a=[0], group_b=[1],
-                                  gamma_init=gamma)
-            assert term.gamma_param is gamma   # same object — no copy made
-
-            opt = torch.optim.Adam(term.parameters(), lr=0.1)
-            # opt.step() updates `gamma` in-place; the caller can inspect it.
-        """
-
-        def __init__(
-            self,
-            name: str,
-            group_a: list[int],
-            group_b: list[int],
-            gamma_init: float | nn.Parameter | None = None,
-            power: float = 6.0,
-            gamma_min_abs: float = 0.1,
-            *,
-            gamma: float | nn.Parameter | None = None,
-        ) -> None:
-            # ``gamma`` is a convenience alias for ``gamma_init`` so that
-            # ``TorchAFIRTerm(gamma=5.0)`` works the same way as
-            # ``AFIRTerm(gamma=5.0)``.  Passing both raises ``ValueError``.
-            if gamma is not None and gamma_init is not None:
-                raise ValueError(
-                    "TorchAFIRTerm: specify either 'gamma_init' or the alias 'gamma', not both."
-                )
-            if gamma is not None:
-                gamma_init = gamma
-            if gamma_init is None:
-                raise TypeError(
-                    "TorchAFIRTerm.__init__() missing required argument: "
-                    "'gamma_init' (or its alias 'gamma')."
-                )
-            super().__init__(name)
-            self.group_a = list(group_a)
-            self.group_b = list(group_b)
-            # Validate non-empty and disjoint groups at construction time.
-            _validate_afir_groups(self.group_a, self.group_b, f"TorchAFIRTerm '{name}'")
-
-            # ── Resolve gamma value and build self.gamma_param ────────────────
-            # When the caller passes an existing nn.Parameter we store it
-            # directly without creating a copy.  This guarantees that
-            # ``term.parameters()`` yields the *same* Python object, so an
-            # external optimizer (e.g. Adam(term.parameters())) updates the
-            # tensor the caller holds and its ``.grad`` attribute is populated
-            # correctly after each BiasCalculator step.
-            #
-            # When a plain float (or any non-Parameter value) is passed we
-            # create a fresh nn.Parameter as before.
-            if isinstance(gamma_init, nn.Parameter):
-                # Use the caller's Parameter directly — no float() conversion,
-                # no copy, no graph detachment.
-                _gamma_scalar = float(gamma_init.detach())
-                self.gamma_param = gamma_init
-            else:
-                _gamma_scalar = float(gamma_init)
-                self.gamma_param = nn.Parameter(torch.tensor(_gamma_scalar, dtype=torch.float64))
-
-            if gamma_min_abs > 0.0 and abs(_gamma_scalar) < gamma_min_abs:
+    def evaluate_tensor(
+        self,
+        positions: "torch.Tensor",
+        atomic_numbers: list[int] | None = None,
+    ) -> "torch.Tensor":
+        ctx = TorchGeometryContext(positions=positions, atomic_numbers=atomic_numbers)
+        vars_: dict[str, Any] = {
+            key: extractor(ctx) for key, extractor in self.variables.items()
+        }
+        # Merge all param sources; submodules are passed as nn.Module objects
+        # so fn can call them directly (e.g. p["mlp"](x)).
+        #
+        # Collision detection: warn when a key defined in an earlier source
+        # is silently overwritten by a later one.  Precedence order is
+        # fixed_params → trainable_params → submodules, mirroring the update
+        # sequence below.  We surface every collision so the user can rename
+        # conflicting keys before a trainable parameter gets hidden by a
+        # constant (the most dangerous silent failure mode).
+        params: dict[str, Any] = dict(self.fixed_params)
+        for source_name, source in (
+            ("trainable_params", dict(self.trainable_params)),
+            ("submodules", dict(self.submodules)),
+        ):
+            collisions = set(params.keys()) & set(source.keys())
+            if collisions:
                 warnings.warn(
-                    f"TorchAFIRTerm '{name}': gamma_init={_gamma_scalar:.3g} kJ/mol is very "
-                    f"close to zero (|gamma| < {gamma_min_abs} kJ/mol). "
-                    "The gradient ∂alpha/∂gamma diverges near gamma=0, which may cause "
-                    "optimizer instability. Consider initializing with a non-zero value "
-                    "such as gamma_init=1.0.",
+                    f"TorchCallableTerm '{self.name}': parameter key(s) "
+                    f"{sorted(collisions)} defined in an earlier source are "
+                    f"overwritten by '{source_name}'. Rename the conflicting "
+                    "keys to avoid silent parameter shadowing.",
                     UserWarning,
                     stacklevel=2,
                 )
-            self.power = float(power)
+            params.update(source)
+        return self.fn(vars_, params)
 
-        def evaluate_tensor(
-            self,
-            positions: torch.Tensor,
-            atomic_numbers: list[int] | None = None,
-        ) -> torch.Tensor:
-            if atomic_numbers is None:
-                raise ValueError("TorchAFIRTerm.evaluate_tensor() requires atomic_numbers.")
-            # gamma_param is an nn.Parameter — _alpha_tensor propagates grad through it.
-            return afir_energy_tensor(
-                positions,
-                atomic_numbers,
-                self.group_a,
-                self.group_b,
-                self.gamma_param,
-                self.power,
+
+class TorchAFIRTerm(TorchBiasTerm):
+    """
+    AFIR bias term with a learnable ``gamma`` parameter (``nn.Parameter``).
+
+    ``power`` remains a fixed float because it appears only as an integer-like
+    exponent and its gradient is rarely meaningful in practice.
+
+    Parameters
+    ----------
+    name : str
+        Identifier used in log output.
+    group_a, group_b : list[int]
+        0-based atom indices for fragments A and B (non-overlapping).
+    gamma_init : float or nn.Parameter
+        Initial value of the AFIR gamma parameter (kJ/mol).
+        Stored as ``self.gamma_param`` (``nn.Parameter``, float64).
+
+        Accepts either a plain ``float`` (a fresh ``nn.Parameter`` is
+        created internally) **or** an existing ``nn.Parameter`` (used
+        directly without copying, so ``term.parameters()`` yields the
+        same object the caller holds).  Passing an ``nn.Parameter`` is
+        the recommended pattern when you need to monitor or update
+        ``gamma`` from outside ``BiasCalculator``::
+
+            gamma = nn.Parameter(torch.tensor(3.0, dtype=torch.float64))
+            term  = TorchAFIRTerm(..., gamma_init=gamma)
+            # term.gamma_param is gamma — same object, not a copy.
+            opt = torch.optim.Adam(term.parameters(), lr=0.1)
+            # opt now updates the same tensor the caller holds.
+
+        .. warning::
+           Initializing with ``gamma_init=0`` (or very close to zero) is
+           discouraged. The gradient ``∂alpha/∂gamma`` diverges near zero
+           due to the smooth approximation used in ``_alpha_tensor``, which
+           can cause optimizer instability at the first step.
+           A ``UserWarning`` is emitted when ``|gamma_init| < 0.1`` kJ/mol.
+
+    power : float
+        Exponent in the ω weight function (default: 6, fixed).
+    gamma_min_abs : float, optional
+        Threshold below which a ``UserWarning`` is emitted (default: 0.1 kJ/mol).
+        Set to 0.0 to suppress the warning.
+
+    Examples
+    --------
+    .. rubric:: Float initialisation (most common)
+
+    ::
+
+        import torch
+        from ase_biaspot import TorchAFIRTerm
+
+        term = TorchAFIRTerm(
+            name="afir_learnable",
+            group_a=[0, 1],
+            group_b=[2, 3],
+            gamma_init=2.5,
+        )
+        # After a BiasCalculator step:
+        print(term.gamma_param.grad)   # ∂E_AFIR / ∂gamma
+
+        opt = torch.optim.Adam(term.parameters(), lr=0.1)
+        opt.step(); opt.zero_grad()
+
+    .. rubric:: ``nn.Parameter`` passthrough (external monitoring)
+
+    ::
+
+        import torch, torch.nn as nn
+        from ase_biaspot import TorchAFIRTerm
+
+        gamma = nn.Parameter(torch.tensor(3.0, dtype=torch.float64))
+        term  = TorchAFIRTerm(name="afir", group_a=[0], group_b=[1],
+                              gamma_init=gamma)
+        assert term.gamma_param is gamma   # same object — no copy made
+
+        opt = torch.optim.Adam(term.parameters(), lr=0.1)
+        # opt.step() updates `gamma` in-place; the caller can inspect it.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        group_a: list[int],
+        group_b: list[int],
+        gamma_init: "float | nn.Parameter | None" = None,
+        power: float = 6.0,
+        gamma_min_abs: float = 0.1,
+        *,
+        gamma: "float | nn.Parameter | None" = None,
+    ) -> None:
+        # ``gamma`` is a convenience alias for ``gamma_init`` so that
+        # ``TorchAFIRTerm(gamma=5.0)`` works the same way as
+        # ``AFIRTerm(gamma=5.0)``.  Passing both raises ``ValueError``.
+        if gamma is not None and gamma_init is not None:
+            raise ValueError(
+                "TorchAFIRTerm: specify either 'gamma_init' or the alias 'gamma', not both."
+            )
+        if gamma is not None:
+            gamma_init = gamma
+        if gamma_init is None:
+            raise TypeError(
+                "TorchAFIRTerm.__init__() missing required argument: "
+                "'gamma_init' (or its alias 'gamma')."
+            )
+        super().__init__(name)
+        self.group_a = list(group_a)
+        self.group_b = list(group_b)
+        # Validate non-empty and disjoint groups at construction time.
+        _validate_afir_groups(self.group_a, self.group_b, f"TorchAFIRTerm '{name}'")
+
+        # ── Resolve gamma value and build self.gamma_param ────────────────
+        import torch as _torch
+        import torch.nn as _nn
+        if isinstance(gamma_init, _nn.Parameter):
+            _gamma_scalar = float(gamma_init.detach())
+            self.gamma_param = gamma_init
+        else:
+            _gamma_scalar = float(gamma_init)
+            self.gamma_param = _nn.Parameter(
+                _torch.tensor(_gamma_scalar, dtype=_torch.float64)
             )
 
-else:
-    # Stub classes when PyTorch is not installed.
-    # They can be referenced at import time; instantiation raises ImportError
-    # via require_torch() with a consistent, install-hint error message.
-    _STUB_MSG = "TorchBiasTerm"
+        if gamma_min_abs > 0.0 and abs(_gamma_scalar) < gamma_min_abs:
+            warnings.warn(
+                f"TorchAFIRTerm '{name}': gamma_init={_gamma_scalar:.3g} kJ/mol is very "
+                f"close to zero (|gamma| < {gamma_min_abs} kJ/mol). "
+                "The gradient ∂alpha/∂gamma diverges near gamma=0, which may cause "
+                "optimizer instability. Consider initializing with a non-zero value "
+                "such as gamma_init=1.0.",
+                UserWarning,
+                stacklevel=2,
+            )
+        self.power = float(power)
 
-    class TorchBiasTerm(BiasTerm):  # type: ignore[no-redef]
-        """Stub: raises ImportError when PyTorch is not installed."""
-
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            require_torch("TorchBiasTerm")
-
-        def evaluate(self, *args: object, **kwargs: object) -> float:
-            require_torch("TorchBiasTerm")
-            return 0.0  # never reached; require_torch() always raises here
-
-    TorchCallableTerm = TorchBiasTerm  # type: ignore[misc,assignment]
-    TorchAFIRTerm = TorchBiasTerm  # type: ignore[misc,assignment]
+    def evaluate_tensor(
+        self,
+        positions: "torch.Tensor",
+        atomic_numbers: list[int] | None = None,
+    ) -> "torch.Tensor":
+        if atomic_numbers is None:
+            raise ValueError("TorchAFIRTerm.evaluate_tensor() requires atomic_numbers.")
+        # gamma_param is an nn.Parameter — _alpha_tensor propagates grad through it.
+        return afir_energy_tensor(
+            positions,
+            atomic_numbers,
+            self.group_a,
+            self.group_b,
+            self.gamma_param,
+            self.power,
+        )

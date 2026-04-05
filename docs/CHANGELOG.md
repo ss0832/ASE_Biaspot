@@ -6,6 +6,53 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.9] — 2026-04-05
+
+### Fixed
+
+- **Bug 3 — `afir_energy` / `afir_energy_tensor` / `_alpha_tensor`: near-zero
+  gamma guard widened and unified** (`afir.py`).
+
+  The original guard (`< 1e-15`) was too narrow: empirical testing showed that
+  `gamma = 2e-15` also yields `inf` due to non-monotone float64 rounding in the
+  `_alpha` denominator.  The collapse is hardware-dependent and cannot be
+  reliably patched with any single tight boundary value.
+
+  Additionally, the `_alpha` formula has a *removable singularity* at
+  `gamma = 0`: as `gamma → 0` the ratio `g / denom` converges to a non-zero
+  constant (~1.43e-3 Eh/a0) rather than zero, producing a spurious ~0.147 eV
+  bias energy even with "no force" intent.  Returning 0.0 for
+  `|gamma| <= 1e-8` is therefore both numerically safe and physically correct.
+
+  **Changes:**
+
+  - Introduced `_GAMMA_GUARD_THRESHOLD = 1e-8` as a single named constant
+    shared across all gamma guard locations.
+  - `_alpha()` now applies the guard internally (early-return 0.0), so callers
+    no longer need to guard before calling it.
+  - `afir_energy()`, `afir_energy_tensor()` (float path), and `_alpha_tensor()`
+    all use `_GAMMA_GUARD_THRESHOLD` consistently.
+  - Removed the separate `_ALPHA_GUARD_THRESHOLD = 1e-6` constant; replaced
+    by the unified `_GAMMA_GUARD_THRESHOLD`.
+
+  Physical gamma values (minimum practical value ~0.1 kJ/mol) are 7 orders of
+  magnitude above the threshold and are entirely unaffected.
+
+### Documentation
+
+- **`afir._alpha` docstring** — Near-zero guard section rewritten to explain
+  both the non-monotone float64 collapse and the removable-singularity issue.
+  Notes section updated accordingly.
+
+- **`afir._alpha_tensor` docstring** — Near-zero guard section updated to
+  reference `_GAMMA_GUARD_THRESHOLD` and note the consistency with the NumPy
+  path.
+
+- **`afir.afir_energy` / `afir.afir_energy_tensor` docstrings** — `gamma`
+  parameter descriptions updated to reference `_GAMMA_GUARD_THRESHOLD`.
+
+---
+
 ## [0.1.8] — 2026-04-04
 
 ### Fixed

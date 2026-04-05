@@ -317,7 +317,12 @@ class TestBug2OutOfPlaneGradientExplosion:
 
 
 class TestBug3AlphaTensorNearZeroGamma:
-    """_alpha_tensor must return a finite, bounded gradient when |gamma| < 1e-6."""
+    """_alpha_tensor must return a finite, bounded gradient when |gamma| <= _GAMMA_GUARD_THRESHOLD.
+
+    Updated in v0.1.9: threshold widened from 1e-6 to _GAMMA_GUARD_THRESHOLD (1e-8).
+    Test values that were formerly in the guard zone (e.g. 1e-7) are now above the
+    threshold and use the normal formula path; they are tested separately below.
+    """
 
     # ── Forward value ─────────────────────────────────────────────────────────
 
@@ -327,8 +332,10 @@ class TestBug3AlphaTensorNearZeroGamma:
         assert alpha.item() == 0.0
 
     def test_near_zero_gamma_returns_zero(self) -> None:
-        """|gamma| = 1e-7 < 1e-6 threshold → alpha = 0."""
-        for g_val in [1e-7, -1e-7, 5e-8, -5e-8]:
+        """|gamma| <= _GAMMA_GUARD_THRESHOLD (1e-8) → alpha = 0."""
+        from ase_biaspot.afir import _GAMMA_GUARD_THRESHOLD
+
+        for g_val in [_GAMMA_GUARD_THRESHOLD, -_GAMMA_GUARD_THRESHOLD, 1e-9, -1e-9]:
             gamma = torch.tensor(g_val, dtype=torch.float64, requires_grad=True)
             alpha = _alpha_tensor(gamma)
             assert alpha.item() == 0.0, f"Expected 0.0 for gamma={g_val}, got {alpha.item()}"
@@ -341,19 +348,23 @@ class TestBug3AlphaTensorNearZeroGamma:
     # ── Gradient (the primary bug) ────────────────────────────────────────────
 
     def test_zero_gamma_no_nan_gradient(self) -> None:
-        """The critical bug: ∂alpha/∂gamma at gamma=0 must not be NaN/Inf."""
+        """The critical bug: d(alpha)/d(gamma) at gamma=0 must not be NaN/Inf."""
         gamma = torch.tensor(0.0, dtype=torch.float64, requires_grad=True)
         alpha = _alpha_tensor(gamma)
         alpha.backward()
         assert gamma.grad is not None
         assert torch.isfinite(gamma.grad), (
             f"NaN/Inf gradient at gamma=0: {gamma.grad.item()}\n"
-            "This is the Bug 3 regression — ∂alpha/∂gamma diverges near zero."
+            "This is the Bug 3 regression — d(alpha)/d(gamma) diverges near zero."
         )
 
     def test_near_zero_gamma_gradient_is_finite(self) -> None:
-        """Gradient must be finite for all |gamma| values in the guard zone."""
-        for g_val in [0.0, 1e-7, -1e-7, 5e-8, 1e-6 - 1e-10]:
+        """Gradient must be finite for all |gamma| values at or near the guard zone."""
+        from ase_biaspot.afir import _GAMMA_GUARD_THRESHOLD
+
+        # Below threshold: guarded → gradient = 0 (finite)
+        # Above threshold: normal formula → gradient finite for these values
+        for g_val in [0.0, 1e-9, -1e-9, _GAMMA_GUARD_THRESHOLD, 1e-7, -1e-7]:
             gamma = torch.tensor(g_val, dtype=torch.float64, requires_grad=True)
             alpha = _alpha_tensor(gamma)
             alpha.backward()
@@ -362,8 +373,10 @@ class TestBug3AlphaTensorNearZeroGamma:
             )
 
     def test_near_zero_gamma_gradient_is_bounded(self) -> None:
-        """Gradient magnitude must be < 1.0 (not ~1e12) in the guard zone."""
-        for g_val in [0.0, 1e-7, -1e-7]:
+        """Gradient magnitude must be < 1.0 (not ~1e12) inside the guard zone."""
+        from ase_biaspot.afir import _GAMMA_GUARD_THRESHOLD
+
+        for g_val in [0.0, 1e-9, -1e-9, _GAMMA_GUARD_THRESHOLD]:
             gamma = torch.tensor(g_val, dtype=torch.float64, requires_grad=True)
             _alpha_tensor(gamma).backward()
             grad_abs = gamma.grad.abs().item()
@@ -381,9 +394,13 @@ class TestBug3AlphaTensorNearZeroGamma:
     # ── Normal gamma still works ──────────────────────────────────────────────
 
     def test_normal_gamma_value_unchanged(self) -> None:
-        """For |gamma| >= 1e-6 the formula is unaffected."""
+        """For |gamma| well above threshold the formula is unaffected."""
         from ase_biaspot.afir import _alpha
 
+        # Use values well above _GAMMA_GUARD_THRESHOLD (1e-8) where the smooth
+        # approximation g_smooth = sqrt(g^2 + 1e-24) is indistinguishable from
+        # abs(g) at float64 precision.  At very small gamma (e.g. 1e-7) the two
+        # differ by ~5e-7 (the smooth approx is intentional; see _alpha_tensor).
         for g_val in [1.0, 5.0, -5.0, 100.0, 1e-5]:
             gamma_t = torch.tensor(g_val, dtype=torch.float64)
             alpha_t = _alpha_tensor(gamma_t).item()
@@ -393,21 +410,25 @@ class TestBug3AlphaTensorNearZeroGamma:
             )
 
     def test_normal_gamma_gradient_flows(self) -> None:
-        """∂alpha/∂gamma is non-zero for normal (non-near-zero) gamma."""
+        """d(alpha)/d(gamma) is non-zero for normal (non-near-zero) gamma."""
         gamma = torch.tensor(5.0, dtype=torch.float64, requires_grad=True)
         _alpha_tensor(gamma).backward()
         assert gamma.grad is not None
         assert gamma.grad.item() != 0.0
 
     def test_boundary_just_above_threshold(self) -> None:
-        """gamma = 1e-6 (on boundary) must use the normal formula path."""
-        from ase_biaspot.afir import _alpha
+        """gamma just above _GAMMA_GUARD_THRESHOLD uses the normal formula (non-zero)."""
+        from ase_biaspot.afir import _GAMMA_GUARD_THRESHOLD
 
-        g_val = 1e-6
+        # 10x above threshold: guard does not apply → alpha must be non-zero.
+        # We do not require exact agreement with _alpha() here because the smooth
+        # approximation (sqrt(g^2 + 1e-24)) intentionally differs from abs(g) at
+        # small gamma; the difference shrinks to < 1e-10 only for gamma >= ~1e-4.
+        g_val = _GAMMA_GUARD_THRESHOLD * 10  # 1e-7
         gamma_t = torch.tensor(g_val, dtype=torch.float64)
         alpha_t = _alpha_tensor(gamma_t).item()
-        alpha_np = _alpha(g_val)
-        assert alpha_t != 0.0 or abs(alpha_np) < 1e-30
+        assert alpha_t != 0.0, f"Expected non-zero alpha above threshold, got {alpha_t}"
+        assert torch.isfinite(torch.tensor(alpha_t)), f"Expected finite alpha, got {alpha_t}"
 
     # ── Integration: afir_energy_tensor with near-zero tensor gamma ───────────
 

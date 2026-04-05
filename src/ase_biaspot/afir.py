@@ -115,7 +115,7 @@ def _alpha(gamma_kjmol: float) -> float:
     ------------------------------------------
     In :func:`afir_energy` the ``power`` exponent appears in the weight
     ``omega_ij = ((R_i + R_j) / r_ij) ** power``.  When each fragment
-    contains exactly one atom (|A| = |B| = 1) the sum ``A/B = omega * r_ij /
+    contains exactly one atom (``|A| = |B| = 1``) the sum ``A/B = omega * r_ij /
     omega = r_ij`` so the power cancels and the energy reduces to
     ``alpha * r_ij``.  This is mathematically correct and **by design**;
     ``power`` only has a visible effect when at least one fragment contains
@@ -279,7 +279,7 @@ def afir_energy(
 
     Notes
     -----
-    When each fragment contains exactly one atom (|A| = |B| = 1) the sum
+    When each fragment contains exactly one atom (``|A| = |B| = 1``) the sum
     ``A/B`` reduces to ``r_ij`` regardless of ``power``, so the exponent
     has no visible effect in that special case.  ``power`` only matters
     when at least one fragment has two or more atoms.

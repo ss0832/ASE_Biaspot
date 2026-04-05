@@ -849,8 +849,6 @@ class TestEvaluateNoGradPath:
 
     def test_torch_callable_term_evaluate_no_param_grads(self):
         """evaluate() must not populate nn.Parameter.grad (no-grad mode)."""
-        import torch
-
         term = _harmonic_term(k_init=1.0)
         pos = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
         term.zero_grad()

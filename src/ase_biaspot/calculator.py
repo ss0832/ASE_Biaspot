@@ -469,9 +469,7 @@ class BiasCalculator(Calculator):
             if not self._warned_fd:
                 # Warn if any fd_only term originally supported autograd —
                 # that means we're falling back due to torch being absent.
-                fd_autograd_capable = [
-                    t for t in fd_only_terms if t.supports_autograd
-                ]
+                fd_autograd_capable = [t for t in fd_only_terms if t.supports_autograd]
                 if fd_autograd_capable and not _TORCH_AVAILABLE:
                     self._warn_fd_fallback()
             for t in fd_only_terms:

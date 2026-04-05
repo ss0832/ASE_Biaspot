@@ -239,6 +239,7 @@ class TestTorchBiasTermBase:
         assert isinstance(result, float)
         # Value must match what evaluate_tensor() returns directly
         import torch
+
         with torch.no_grad():
             p_t = torch.tensor(pos, dtype=torch.float64)
             expected = float(term.evaluate_tensor(p_t).item())
@@ -907,8 +908,9 @@ class TestGradientModeFdForTorchTerms:
         f_auto = atoms_auto.get_forces()
         f_fd = atoms_fd.get_forces()
         # Central-difference FD with h=1e-6 gives ~1e-10 agreement for smooth potentials
-        np.testing.assert_allclose(f_fd, f_auto, atol=1e-6,
-                                   err_msg="FD and autograd forces must agree to 1e-6 eV/Å")
+        np.testing.assert_allclose(
+            f_fd, f_auto, atol=1e-6, err_msg="FD and autograd forces must agree to 1e-6 eV/Å"
+        )
 
     def test_torch_afir_term_fd_forces_finite(self):
         """gradient_mode='fd' must produce finite forces for TorchAFIRTerm."""
@@ -919,9 +921,7 @@ class TestGradientModeFdForTorchTerms:
 
         atoms = molecule("H2")
         term = TorchAFIRTerm(name="afir", group_a=[0], group_b=[1], gamma_init=3.0)
-        atoms.calc = BiasCalculator(
-            base_calculator=EMT(), terms=[term], gradient_mode="fd"
-        )
+        atoms.calc = BiasCalculator(base_calculator=EMT(), terms=[term], gradient_mode="fd")
         forces = atoms.get_forces()
         assert np.all(np.isfinite(forces))
 

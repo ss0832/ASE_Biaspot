@@ -6,6 +6,75 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.10] — 2026-04-05
+
+### Fixed
+
+- **Bug 1 — `evaluate_tensor()` non-scalar: inconsistent exception
+  type between the energy-only path and the forces path** (`calculator.py`).
+
+  When a `BiasTerm.evaluate_tensor()` implementation returned a non-scalar
+  tensor (e.g. shape `(2,)` instead of `()`), the two code paths in
+  `BiasCalculator._compute_bias()` raised *different* exception types:
+
+  - **Energy-only path** (`need_forces=False`): called `.item()` on the
+    non-scalar tensor, which raised `RuntimeError` (PyTorch's own message,
+    with no mention of the offending term name or shape).
+  - **Forces path** (`need_forces=True`): delegated to
+    `_autograd_energy_and_gradient()`, which already had an explicit shape
+    check and raised `TypeError` with a descriptive message.
+
+  The energy-only fast path now performs the same shape check before calling
+  `.item()`, raising `TypeError` in both paths with a uniform message that
+  includes the term name and the actual offending tensor shape.
+
+  **Affected file:** `src/ase_biaspot/calculator.py`
+
+  **New tests:** `tests/test_0_1_10_fixes.py` —
+  `test_bug1_energy_only_raises_type_error`,
+  `test_bug1_forces_path_raises_type_error`,
+  `test_bug1_error_message_contains_term_name`,
+  `test_bug1_error_message_contains_shape`,
+  `test_bug1_scalar_term_does_not_raise`.
+
+- **Bug 2 — `GeometryContext` and
+  `TorchGeometryContext` did not accept `atomic_numbers`** (`context.py`,
+  `core.py`).
+
+  `BiasTerm` authors who needed to branch on element identity inside a bias
+  term could not forward `atomic_numbers` into the geometry context: both
+  `GeometryContext` and `TorchGeometryContext` only accepted `positions`.
+  Constructing the context with `atomic_numbers` raised `TypeError`, and
+  accessing `ctx.atomic_numbers` raised `AttributeError`.
+
+  **Changes:**
+
+  - `GeometryContext` (frozen dataclass): added `atomic_numbers:
+    list[int] | None = None` field with a defensive copy in `__post_init__`
+    (mirrors the existing defensive copy for `positions`). Updated docstring
+    with a usage example.
+  - `TorchGeometryContext`: added `atomic_numbers: list[int] | None = None`
+    parameter to `__init__` and stored it in `__slots__`.
+  - `CallableTerm.evaluate()` (`core.py`): now passes `atomic_numbers` to
+    `GeometryContext(positions=positions, atomic_numbers=atomic_numbers)`.
+  - `TorchCallableTerm.evaluate_tensor()` (`core.py`): now passes
+    `atomic_numbers` to
+    `TorchGeometryContext(positions=positions, atomic_numbers=atomic_numbers)`.
+
+  Variable extractor lambdas such as `lambda ctx: ctx.atomic_numbers` now
+  work in both `CallableTerm` and `TorchCallableTerm` without any changes to
+  existing user code.
+
+  **Affected files:** `src/ase_biaspot/context.py`, `src/ase_biaspot/core.py`
+
+  **New tests:** `tests/test_0_1_10_fixes.py` —
+  `TestGeometryContextAtomicNumbers` (8 cases),
+  `TestTorchGeometryContextAtomicNumbers` (4 cases),
+  `test_callable_term_forwards_atomic_numbers_to_context`,
+  `test_torch_callable_term_forwards_atomic_numbers_to_context`.
+
+---
+
 ## [0.1.9] — 2026-04-05
 
 ### Fixed

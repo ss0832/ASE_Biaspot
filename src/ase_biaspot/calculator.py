@@ -421,7 +421,14 @@ class BiasCalculator(Calculator):
                 p_t = _torch.tensor(positions, dtype=_torch.float64)
                 with _torch.no_grad():
                     for t in torch_module_terms + autograd_terms:
-                        per_term[t.name] = float(t.evaluate_tensor(p_t, atomic_numbers).item())
+                        e = t.evaluate_tensor(p_t, atomic_numbers)
+                        if e.shape != ():
+                            raise TypeError(
+                                f"Term '{t.name}': evaluate_tensor() must return a scalar tensor "
+                                f"(shape=()), but got shape={tuple(e.shape)}. "
+                                "To sum over multiple contributions, return e.sum() inside fn."
+                            )
+                        per_term[t.name] = float(e.item())
             else:
                 # torch unavailable — fall back to evaluate() for autograd_terms too
                 for t in autograd_terms:

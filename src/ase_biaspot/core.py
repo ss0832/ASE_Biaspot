@@ -530,7 +530,7 @@ class CallableTerm(BiasTerm):
         positions: np.ndarray,
         atomic_numbers: list[int] | None = None,
     ) -> float:
-        ctx = GeometryContext(positions=positions)
+        ctx = GeometryContext(positions=positions, atomic_numbers=atomic_numbers)
         vars_: dict[str, Any] = {key: extractor(ctx) for key, extractor in self.variables.items()}
         try:
             raw = self.fn(vars_, self.params)
@@ -728,7 +728,7 @@ if _TORCH_AVAILABLE:
             positions: torch.Tensor,
             atomic_numbers: list[int] | None = None,
         ) -> torch.Tensor:
-            ctx = TorchGeometryContext(positions=positions)
+            ctx = TorchGeometryContext(positions=positions, atomic_numbers=atomic_numbers)
             vars_: dict[str, Any] = {
                 key: extractor(ctx) for key, extractor in self.variables.items()
             }

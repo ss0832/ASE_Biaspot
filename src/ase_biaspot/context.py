@@ -62,13 +62,39 @@ class GeometryContext:
 
     The ``positions`` array is defensively copied at construction so that
     later mutations of the original array cannot silently affect the context.
+
+    Parameters
+    ----------
+    positions : np.ndarray
+        Atomic positions array of shape ``(N, 3)`` in Ångström.
+    atomic_numbers : list[int] or None, optional
+        Atomic numbers (Z) for each atom, in the same order as *positions*.
+        ``None`` (default) means no element information is available.
+        Pass this when your bias term depends on the chemical identity of
+        atoms — for example, when applying element-specific parameters:
+
+        .. code-block:: python
+
+            def evaluate(self, positions, atomic_numbers=None):
+                ctx = GeometryContext(
+                    positions=positions,
+                    atomic_numbers=atomic_numbers,
+                )
+                # ctx.atomic_numbers is now accessible inside the callable
+                if ctx.atomic_numbers is not None:
+                    z_i = ctx.atomic_numbers[0]
     """
 
     positions: np.ndarray
+    atomic_numbers: list[int] | None = None
 
     def __post_init__(self) -> None:
         # frozen=True prevents normal attribute assignment, so we bypass it.
         object.__setattr__(self, "positions", np.array(self.positions, copy=True))
+        # Defensively copy atomic_numbers (if provided) so that later mutations
+        # of the caller's list cannot silently affect the context.
+        if self.atomic_numbers is not None:
+            object.__setattr__(self, "atomic_numbers", list(self.atomic_numbers))
 
     # ── Geometry accessors ───────────────────────────────────────────────────
 
@@ -131,11 +157,12 @@ class TorchGeometryContext:
         At construction time if PyTorch is not installed.
     """
 
-    __slots__ = ("positions",)
+    __slots__ = ("atomic_numbers", "positions")
 
-    def __init__(self, positions: torch.Tensor) -> None:
+    def __init__(self, positions: torch.Tensor, atomic_numbers: list[int] | None = None) -> None:
         require_torch("TorchGeometryContext")
         self.positions = positions
+        self.atomic_numbers = atomic_numbers
 
     def distance(self, i: int, j: int) -> torch.Tensor:
         return geometry.distance_tensor(self.positions, i, j)

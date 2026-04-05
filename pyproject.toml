@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ase-biaspot"
-version = "0.1.9"
+version = "0.1.10"
 description = "User-defined bias potentials for ASE geometry optimization with learnable weights (nn.Parameter), torch/autograd and numerical fallback."
 readme = "README.md"
 license = "GPL-3.0-only"

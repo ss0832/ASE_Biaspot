@@ -9,22 +9,19 @@ BiasTerm (abstract base class)
    :show-inheritance:
 
 .. note::
-   **Important Note on `self.name` Enforcement**
+   **``self.name`` enforcement**
 
-   `self.name` enforcement applies only to subclasses that **define their own
-   __init__**. The `__init_subclass__` hook wraps manually written `__init__`
-   methods and raises `TypeError` at instantiation time when `self.name` is not
-   assigned inside them.
+   ``self.name`` must be assigned inside ``__init__`` of every concrete
+   subclass.  Forgetting to do so raises :exc:`TypeError` at instantiation
+   time — enforced uniformly by :class:`_BiasTermMeta.__call__` regardless
+   of *how* the subclass defines its initialiser:
 
-   If a subclass does **not** define `__init__` at all (relying entirely on
-   Python's default object initializer), no `TypeError` is raised at
-   instantiation; `self.name` simply remains unset (`AttributeError` will occur
-   later when `BiasCalculator` attempts to access `term.name`).
-
-   To trigger the enforcement in all cases, always provide an explicit `__init__`
-   that assigns `self.name`, as shown in the examples below. Dataclass-based
-   subclasses (such as `AFIRTerm`) are unaffected because their generated
-   `__init__` always sets `name` through the required field declaration.
+   * **Manual ``__init__``** — wrapped automatically; error raised immediately.
+   * **``@dataclass``-generated ``__init__``** — ``name: str`` is a required
+     field, so it is always set; no special handling needed.
+   * **No ``__init__`` (inherits from parent)** — the check still fires after
+     the inherited ``__init__`` completes.
+   * **Class-level ``name`` attribute** — satisfies the check; no error.
 
 AFIRTerm
 --------
